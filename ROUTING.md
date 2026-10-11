@@ -397,13 +397,14 @@ balancer does not add a second reconnect path.
 - For an account-specific setup failure, try another eligible account if the
   retained owner cannot continue and no provisional claim conflicts.
 - The balancer does not replay in-flight work.
-- Upstream WebSocket closes produce a typed error with the original close code
-  and reason. Code `1009` becomes retryable `request_too_large` with `status: 502`.
-  Codex can exhaust its WebSocket stream retries and then send full history over
-  HTTP. The balancer does not switch transports or replay the request. Codex
-  remote compaction can exceed the same upstream byte limit even when the token
-  context window has room. Protocol, payload, and policy rejections are permanent
-  request errors. Transport failures remain retryable.
+- Upstream WebSocket closes produce a typed, retryable error with the original
+  close code and reason. Code `1009` becomes `request_too_large`; other close
+  codes use `upstream_websocket_closed`. All use `status: 502` so Codex can
+  exhaust its WebSocket stream retries and then send full history over HTTP.
+  The balancer does not switch transports or replay the request. Codex remote
+  compaction can exceed the same upstream byte limit even when the token context
+  window has room. Structured upstream policy or payload errors remain permanent
+  request errors; an untyped close frame is treated as a dropped stream.
 - WebSocket recovery errors use `type: error`, `status: 502`, and
   `retryable: true`. The nested `error` retains the upstream code, type, message,
   parameter, and extra fields. `upstream_type` and, when supplied,

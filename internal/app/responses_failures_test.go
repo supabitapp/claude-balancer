@@ -123,16 +123,19 @@ func TestUpstreamCloseDuringWritePreservesDetails(t *testing.T) {
 
 func TestUpstreamClosePreservesDetailsAcrossTransports(t *testing.T) {
 	for _, test := range []struct {
-		close websocket.StatusCode
-		code  string
-		http  int
-		ws    int
+		close     websocket.StatusCode
+		code      string
+		http      int
+		ws        int
+		retryable bool
 	}{
-		{websocket.StatusMessageTooBig, "request_too_large", 502, 502},
-		{websocket.StatusPolicyViolation, "upstream_websocket_closed", 400, 400},
-		{websocket.StatusProtocolError, "upstream_websocket_closed", 400, 400},
-		{websocket.StatusInvalidFramePayloadData, "upstream_websocket_closed", 400, 400},
-		{websocket.StatusInternalError, "upstream_websocket_closed", 502, 502},
+		{websocket.StatusMessageTooBig, "request_too_large", 502, 502, true},
+		{websocket.StatusProtocolError, "upstream_websocket_closed", 502, 502, true},
+		{websocket.StatusUnsupportedData, "upstream_websocket_closed", 502, 502, true},
+		{websocket.StatusInvalidFramePayloadData, "upstream_websocket_closed", 502, 502, true},
+		{websocket.StatusPolicyViolation, "upstream_websocket_closed", 502, 502, true},
+		{websocket.StatusMandatoryExtension, "upstream_websocket_closed", 502, 502, true},
+		{websocket.StatusInternalError, "upstream_websocket_closed", 502, 502, true},
 	} {
 		for _, mode := range []string{"websocket"} {
 			t.Run(fmt.Sprintf("%d/%s", test.close, mode), func(t *testing.T) {
@@ -149,7 +152,7 @@ func TestUpstreamClosePreservesDetailsAcrossTransports(t *testing.T) {
 					defer conn.CloseNow()
 					writeWebSocketEvent(t, conn, map[string]string{"type": "response.create", "model": "m"})
 					event := readWebSocketFailure(t, conn, test.code)
-					if event.Status != test.ws || event.UpstreamCloseStatus != int(test.close) || !strings.Contains(event.Error.Message, "original reason [redacted]") {
+					if event.Status != test.ws || event.UpstreamCloseStatus != int(test.close) || event.Retryable != test.retryable || !strings.Contains(event.Error.Message, "original reason [redacted]") {
 						t.Fatalf("failure = %+v", event)
 					}
 					readCloseStatus(t, conn, test.close)

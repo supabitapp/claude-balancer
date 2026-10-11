@@ -162,7 +162,11 @@ func testCodexAppServerUpstreamFailure(t *testing.T, websockets bool, scenario s
 	}
 	_, proxy := newWebSocketProxy(t, upstreamURL, []*Account{testAccount("a", 0)})
 	turn, events := runCodexErrorTurn(t, proxy.URL, websockets)
-	if scenario == "message too big" || scenario == "policy" || scenario == "capacity" && !websockets {
+	if scenario == "policy" && websockets {
+		if turn["status"] != "failed" || attempts.Load() != 3 || !strings.Contains(events, "upstream policy detail") || strings.Contains(events, "websocket closed by server") {
+			t.Fatalf("attempts=%d turn=%v events=%s", attempts.Load(), turn, events)
+		}
+	} else if scenario == "message too big" || scenario == "policy" || scenario == "capacity" && !websockets {
 		want := "request_too_large"
 		switch scenario {
 		case "policy":
