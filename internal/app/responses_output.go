@@ -90,6 +90,17 @@ func responseFailure(fields responseFields, fallback int) httpResponseFailure {
 	return failure
 }
 
+func (d *httpResponsesDownstream) failedResponse(failure httpResponseFailure) json.RawMessage {
+	response := responseFields{}
+	for key, value := range d.created {
+		response[key] = value
+	}
+	response["status"] = json.RawMessage(`"failed"`)
+	response["error"], _ = json.Marshal(failure.errorObject())
+	data, _ := json.Marshal(response)
+	return data
+}
+
 func (d *httpResponsesDownstream) fail(failure httpResponseFailure) (err error) {
 	defer func() { observation(d.ctx).delivery(d.ctx, err, d.committed) }()
 	if d.finished {
@@ -117,14 +128,8 @@ func (d *httpResponsesDownstream) fail(failure httpResponseFailure) (err error) 
 		failure.Param = json.RawMessage("null")
 	}
 	if d.committed {
-		response := responseFields{}
-		for key, value := range d.created {
-			response[key] = value
-		}
-		response["status"] = json.RawMessage(`"failed"`)
-		response["error"], _ = json.Marshal(failure.errorObject())
 		fields := responseFields{"type": json.RawMessage(`"response.failed"`)}
-		fields["response"], _ = json.Marshal(response)
+		fields["response"] = d.failedResponse(failure)
 		fields["sequence_number"], _ = json.Marshal(d.sequence)
 		if err := d.writeEvent(fields); err != nil {
 			return err
