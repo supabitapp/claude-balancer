@@ -255,15 +255,26 @@ func (d *httpResponsesDownstream) Write(ctx context.Context, _ websocket.Message
 		if !d.committed && !(d.stream && kind == "response.failed") {
 			return d.fail(failure)
 		}
+		if kind == "error" {
+			kind = "response.failed"
+			fields["type"] = json.RawMessage(`"response.failed"`)
+			response := responseFields{}
+			for key, value := range d.created {
+				response[key] = value
+			}
+			response["status"] = json.RawMessage(`"failed"`)
+			response["error"], _ = json.Marshal(failure.errorObject())
+			fields["response"], _ = json.Marshal(response)
+			delete(fields, "error")
+		}
 		observation(ctx).failure(ctx, failure.Status, failure.Code, true)
 	}
-	if kind == "error" {
-		failure := responseFailure(fields, 0)
-		fields["message"], _ = json.Marshal(failure.Message)
-		fields["code"], _ = json.Marshal(failure.Code)
-		fields["param"] = failure.Param
-	}
 	if d.stream {
+		if kind == "response.created" {
+			if err := d.collect(kind, fields); err != nil {
+				return d.fail(httpResponseFailure{Status: 502, Code: "invalid_upstream_output", Message: err.Error()})
+			}
+		}
 		if err := d.writeEvent(fields); err != nil {
 			d.finished = true
 			return err

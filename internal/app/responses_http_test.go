@@ -412,7 +412,7 @@ func TestHTTPResponsesInBandErrors(t *testing.T) {
 					if committed {
 						sendHTTPEvents(t, c, httpCreatedEvent, httpTextDelta)
 					}
-					event := fmt.Sprintf(`{"type":"error","error":{"code":%q,"message":"failure"},"headers":{"authorization":"private","retry-after":"20"}}`, test.code)
+					event := fmt.Sprintf(`{"type":"error","error":{"code":%q,"message":"failure token-a","param":"model","extra":9007199254740993},"headers":{"authorization":"private","retry-after":"20"}}`, test.code)
 					if test.kind == "response.failed" {
 						event = fmt.Sprintf(`{"type":"response.failed","response":{"status":"failed","error":{"code":%q,"message":"failure"},"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`, test.code)
 					}
@@ -432,8 +432,31 @@ func TestHTTPResponsesInBandErrors(t *testing.T) {
 					t.Fatalf("status=%d body=%s", resp.StatusCode, body)
 				}
 				terminal := "event: " + test.kind
+				if committed && test.kind == "error" {
+					terminal = "event: response.failed"
+				}
 				if streamed && (strings.Count(body, "data: [DONE]") != 1 || strings.Count(body, terminal) != 1 || strings.Contains(body, "event: response.completed")) {
 					t.Fatalf("false/duplicate terminal: %s", body)
+				}
+				if test.kind == "error" && (strings.Contains(body, "token-a") || !strings.Contains(body, `"param":"model"`) || !strings.Contains(body, `"extra":9007199254740993`)) {
+					t.Fatalf("error details changed or leaked credentials: %s", body)
+				}
+				if committed && test.kind == "error" {
+					var response responseFields
+					err := readResponseSSE(strings.NewReader(body), func(data []byte) error {
+						fields, err := responseObject(data)
+						if err != nil || string(fields["type"]) != `"response.failed"` {
+							return err
+						}
+						response, err = responseObject(fields["response"])
+						if err != nil {
+							return err
+						}
+						return errResponseFinished
+					})
+					if err != errResponseFinished || string(response["id"]) != `"resp-test"` || string(response["model"]) != `"pool-model"` {
+						t.Fatalf("terminal error lost response identity: %s", body)
+					}
 				}
 				assertHTTPClean(t, srv)
 				if requests.Load() != 1 {

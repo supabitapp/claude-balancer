@@ -33,6 +33,36 @@ func TestCodexAppServerSurfacesUpstreamFailures(t *testing.T) {
 	}
 }
 
+func TestCodexAppServerSurfacesCommittedHTTPError(t *testing.T) {
+	if os.Getenv("CODEX_BALANCER_TEST_CODEX") == "" {
+		t.Skip("set CODEX_BALANCER_TEST_CODEX to run the app-server integration test")
+	}
+	for _, test := range []struct {
+		name    string
+		payload string
+	}{
+		{"flat", `{"type":"error","code":"server_is_overloaded","message":"original ultrafast capacity detail","param":"model"}`},
+		{"nested", `{"type":"error","status":503,"error":{"code":"server_is_overloaded","type":"server_error","message":"original ultrafast capacity detail","param":"model"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var attempts atomic.Int64
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				io.Copy(io.Discard, r.Body)
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprintf(w, "data: %s\n\ndata: %s\n\n", httpCreatedEvent, test.payload)
+			}))
+			defer upstream.Close()
+			_, proxy := newWebSocketProxy(t, upstream.URL, []*Account{testAccount("a", 0)})
+			turn, events := runCodexErrorTurn(t, proxy.URL, false)
+			failure, _ := turn["error"].(map[string]any)
+			if turn["status"] != "failed" || attempts.Load() != 1 || failure["codexErrorInfo"] != "serverOverloaded" || strings.Contains(events, "stream closed before response.completed") {
+				t.Fatalf("attempts=%d turn=%v events=%s", attempts.Load(), turn, events)
+			}
+		})
+	}
+}
+
 func TestCodexAppServerWebSocketSizeFailureFallsBackToHTTP(t *testing.T) {
 	if os.Getenv("CODEX_BALANCER_TEST_CODEX") == "" {
 		t.Skip("set CODEX_BALANCER_TEST_CODEX to run the app-server integration test")
