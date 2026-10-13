@@ -260,6 +260,10 @@ func (d *httpResponsesDownstream) Write(ctx context.Context, _ websocket.Message
 			fields["type"] = json.RawMessage(`"response.failed"`)
 			fields["response"] = d.failedResponse(failure)
 			delete(fields, "error")
+		} else if failure.modelCapacity() {
+			response, _ := responseObject(fields["response"])
+			response["error"], _ = json.Marshal(failure.httpErrorObject())
+			fields["response"], _ = json.Marshal(response)
 		}
 		observation(ctx).failure(ctx, failure.Status, failure.Code, true)
 	}
