@@ -442,6 +442,15 @@ cooldown. This lets Codex retry a transient throttle. Anonymous nonportable
 requests keep their terminal `429`, since no route identity can retain their
 account boundary. Committed SSE events keep their original framing.
 
+HTTP capacity failures use `upstream_model_capacity` as the client-facing error
+code, with the original code and type in `upstream_code` and `upstream_type`.
+Codex treats `server_is_overloaded` and `slow_down` as terminal when it decodes
+HTTP error bodies and `response.failed` events. This mapping lets the client
+retry with its existing backoff and retained account owner. It applies to HTTP
+rejections, failed JSON responses, and SSE failures
+before or after commitment. Original messages and other error fields remain
+available with credential redaction. The balancer does not replay inference.
+
 Thread affinity prefers `thread-id`, then `x-client-request-id`. Session affinity
 prefers `session_id`, `session-id`, `x-codex-session-id`,
 `x-codex-conversation-id`, `x-session-affinity`, then `x-session-id`. Overlapping
@@ -484,7 +493,8 @@ Account invalidation and fast-mode changes produce 503.
 
 Before SSE commitment, failures return JSON with an error status. After an SSE
 event has been flushed, failures remain in the stream and cannot change its HTTP
-status. An upstream `response.failed` remains an SSE event for streaming clients.
+status. An upstream `response.failed` remains an SSE event for streaming clients,
+with capacity errors mapped as described above.
 No incomplete transport is reported as a successful completion.
 
 Limits are 30 seconds for reading the client body, 90 seconds for the upstream

@@ -33,33 +33,56 @@ func TestCodexAppServerSurfacesUpstreamFailures(t *testing.T) {
 	}
 }
 
-func TestCodexAppServerSurfacesCommittedHTTPError(t *testing.T) {
+func TestCodexAppServerRetriesHTTPCapacity(t *testing.T) {
 	if os.Getenv("CODEX_BALANCER_TEST_CODEX") == "" {
 		t.Skip("set CODEX_BALANCER_TEST_CODEX to run the app-server integration test")
 	}
-	for _, test := range []struct {
-		name    string
-		payload string
-	}{
-		{"flat", `{"type":"error","code":"server_is_overloaded","message":"original ultrafast capacity detail","param":"model"}`},
-		{"nested", `{"type":"error","status":503,"error":{"code":"server_is_overloaded","type":"server_error","message":"original ultrafast capacity detail","param":"model"}}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var attempts atomic.Int64
-			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				attempts.Add(1)
-				io.Copy(io.Discard, r.Body)
-				w.Header().Set("Content-Type", "text/event-stream")
-				fmt.Fprintf(w, "data: %s\n\ndata: %s\n\n", httpCreatedEvent, test.payload)
-			}))
-			defer upstream.Close()
-			_, proxy := newWebSocketProxy(t, upstream.URL, []*Account{testAccount("a", 0)})
-			turn, events := runCodexErrorTurn(t, proxy.URL, false)
-			failure, _ := turn["error"].(map[string]any)
-			if turn["status"] != "failed" || attempts.Load() != 1 || failure["codexErrorInfo"] != "serverOverloaded" || strings.Contains(events, "stream closed before response.completed") {
-				t.Fatalf("attempts=%d turn=%v events=%s", attempts.Load(), turn, events)
-			}
-		})
+	for _, code := range []string{"server_is_overloaded", "slow_down"} {
+		for _, test := range []struct {
+			name      string
+			payload   string
+			committed bool
+			status    int
+			failures  int64
+		}{
+			{"flat", `{"type":"error","code":%q,"message":"original capacity detail","param":"model"}`, true, 200, 2},
+			{"nested", `{"type":"error","status":503,"error":{"code":%q,"type":"server_error","message":"original capacity detail","param":"model"}}`, true, 200, 2},
+			{"failed", `{"type":"response.failed","response":{"error":{"code":%q,"message":"original capacity detail"}}}`, true, 200, 2},
+			{"uncommitted failed", `{"type":"response.failed","response":{"error":{"code":%q,"message":"original capacity detail"}}}`, false, 200, 2},
+			{"HTTP rejection", `{"error":{"code":%q,"message":"original capacity detail"}}`, false, 503, 3},
+		} {
+			t.Run(code+"/"+test.name, func(t *testing.T) {
+				var attempts atomic.Int64
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					attempt := attempts.Add(1)
+					io.Copy(io.Discard, r.Body)
+					if attempt <= test.failures && test.status != 200 {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(test.status)
+						fmt.Fprintf(w, test.payload, code)
+						return
+					}
+					w.Header().Set("Content-Type", "text/event-stream")
+					if attempt <= test.failures {
+						if test.committed {
+							fmt.Fprintf(w, "data: %s\n\n", httpCreatedEvent)
+						}
+						fmt.Fprintf(w, "data: %s\n\n", fmt.Sprintf(test.payload, code))
+						return
+					}
+					fmt.Fprintf(w, "data: %s\n\ndata: %s\n\n", httpCreatedEvent, httpCompletedEvent)
+				}))
+				defer upstream.Close()
+				_, proxy := newWebSocketProxy(t, upstream.URL, []*Account{testAccount("a", 0)})
+				turn, events := runCodexErrorTurn(t, proxy.URL, false)
+				if turn["status"] != "completed" || attempts.Load() != test.failures+1 || strings.Contains(events, "Selected model is at capacity") {
+					t.Fatalf("attempts=%d turn=%v events=%s", attempts.Load(), turn, events)
+				}
+				if test.committed && !strings.Contains(events, "original capacity detail") {
+					t.Fatalf("retry diagnostics lost original error: %s", events)
+				}
+			})
+		}
 	}
 }
 
@@ -181,7 +204,7 @@ func testCodexAppServerUpstreamFailure(t *testing.T, websockets bool, scenario s
 				}
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
-			if scenario == "capacity" {
+			if scenario == "capacity" && attempt <= 2 {
 				io.WriteString(w, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"original capacity detail\"}}}\n\n")
 				return
 			}
@@ -196,13 +219,11 @@ func testCodexAppServerUpstreamFailure(t *testing.T, websockets bool, scenario s
 		if turn["status"] != "failed" || attempts.Load() != 3 || !strings.Contains(events, "upstream policy detail") || strings.Contains(events, "websocket closed by server") {
 			t.Fatalf("attempts=%d turn=%v events=%s", attempts.Load(), turn, events)
 		}
-	} else if scenario == "message too big" || scenario == "policy" || scenario == "capacity" && !websockets {
+	} else if scenario == "message too big" || scenario == "policy" {
 		want := "request_too_large"
 		switch scenario {
 		case "policy":
 			want = "upstream policy detail"
-		case "capacity":
-			want = "capacity"
 		}
 		if turn["status"] != "failed" || attempts.Load() != 1 || !strings.Contains(events, want) || strings.Contains(events, "websocket closed by server") {
 			t.Fatalf("attempts=%d turn=%v events=%s", attempts.Load(), turn, events)

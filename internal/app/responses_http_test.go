@@ -431,6 +431,11 @@ func TestHTTPResponsesInBandErrors(t *testing.T) {
 				if resp.StatusCode != want || !strings.Contains(body, test.code) || strings.Contains(body, "private") {
 					t.Fatalf("status=%d body=%s", resp.StatusCode, body)
 				}
+				if test.code == "server_is_overloaded" || test.code == "slow_down" {
+					if !strings.Contains(body, `"code":"upstream_model_capacity"`) || !strings.Contains(body, fmt.Sprintf(`"upstream_code":%q`, test.code)) || strings.Contains(body, fmt.Sprintf(`"code":%q`, test.code)) {
+						t.Fatalf("capacity failure is not retryable: %s", body)
+					}
+				}
 				terminal := "event: " + test.kind
 				if committed && test.kind == "error" {
 					terminal = "event: response.failed"

@@ -36,6 +36,23 @@ func (f httpResponseFailure) transientRateLimit() bool {
 	return websocketRejection(event) == websocketRejectionRateLimited && websocketErrorIs(event, "rate_limit_exceeded")
 }
 
+func (f httpResponseFailure) modelCapacity() bool {
+	var event websocketEnvelope
+	event.Error.Code, event.Error.Type = f.Code, f.Type
+	return websocketRejection(event) == websocketRejectionModelCapacity
+}
+
+func (f httpResponseFailure) httpErrorObject() responseFields {
+	object := f.errorObject()
+	if f.modelCapacity() {
+		object["upstream_code"] = object["code"]
+		object["upstream_type"] = object["type"]
+		object["code"] = json.RawMessage(`"upstream_model_capacity"`)
+		object["type"] = json.RawMessage(`"upstream_error"`)
+	}
+	return object
+}
+
 func responseFailure(fields responseFields, fallback int) httpResponseFailure {
 	failure := httpResponseFailure{Status: fallback, Code: "upstream_error", Type: "upstream_error", Message: "upstream rejected response"}
 	var envelope websocketEnvelope
@@ -96,7 +113,7 @@ func (d *httpResponsesDownstream) failedResponse(failure httpResponseFailure) js
 		response[key] = value
 	}
 	response["status"] = json.RawMessage(`"failed"`)
-	response["error"], _ = json.Marshal(failure.errorObject())
+	response["error"], _ = json.Marshal(failure.httpErrorObject())
 	data, _ := json.Marshal(response)
 	return data
 }
@@ -145,7 +162,7 @@ func (d *httpResponsesDownstream) fail(failure httpResponseFailure) (err error) 
 				d.writer.Header().Set("Retry-After", "1")
 			}
 		}
-		envelope := map[string]any{"error": failure.errorObject()}
+		envelope := map[string]any{"error": failure.httpErrorObject()}
 		if failure.UpstreamStatus != 0 && failure.UpstreamStatus != failure.Status {
 			envelope["upstream_status"] = failure.UpstreamStatus
 		}

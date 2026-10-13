@@ -252,6 +252,10 @@ func (s *server) deliverHTTPJSON(peer *httpResponsesDownstream, accounting *resp
 	if !accepted {
 		return errHTTPAccountUnavailable
 	}
+	if websocketRejection(event) == websocketRejectionModelCapacity {
+		eventFields, _ := responseObject(encoded)
+		return errors.Join(peer.fail(responseFailure(eventFields, 0)), errHTTPRetryOwner)
+	}
 	peer.finished = true
 	if observed := observation(accounting.ctx); observed != nil {
 		observed.status = 200
