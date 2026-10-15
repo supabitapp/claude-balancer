@@ -187,7 +187,10 @@ func (s *server) authorizeAPIKey(r *http.Request) (apiKeyIdentity, bool) {
 	if s.lookupAPIKey == nil {
 		return apiKeyIdentity{}, true
 	}
-	presented := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	presented := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	if presented == "" {
+		presented = strings.TrimSpace(r.Header.Get("x-api-key"))
+	}
 	name, valid, err := s.lookupAPIKey(presented)
 	if err != nil {
 		if s.log != nil {

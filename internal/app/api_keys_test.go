@@ -79,6 +79,13 @@ func TestJWTAPIKeysRequireAnExactStoredMatch(t *testing.T) {
 	}
 	for name, secret := range secrets {
 		assertStatus(t, secret, http.StatusOK)
+		apiRequest := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		apiRequest.Header.Set("x-api-key", secret)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, apiRequest)
+		if response.Code != http.StatusOK {
+			t.Fatalf("x-api-key status = %d, want %d", response.Code, http.StatusOK)
+		}
 		request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 		request.Header.Set("Authorization", "Bearer "+secret)
 		identity, valid := srv.authorizeAPIKey(request)
