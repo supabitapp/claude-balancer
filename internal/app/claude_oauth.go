@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +46,7 @@ type claudeCredentials struct {
 	Email            string
 	OrganizationID   string
 	OrganizationName string
+	DeviceID         string
 	ExpiresAt        time.Time
 	LastRefresh      time.Time
 }
@@ -375,26 +377,40 @@ func accountFromClaudeCredentials(credentials *claudeCredentials) *Account {
 	if credentials == nil {
 		return nil
 	}
+	if credentials.DeviceID == "" {
+		device, err := randomClaudeDeviceID()
+		if err == nil {
+			credentials.DeviceID = device
+		}
+	}
 	return accountFromState(accountState{
-		IDToken:      claudeIdentityToken(credentials.AccountID, credentials.Email),
+		IDToken:      claudeIdentityToken(*credentials),
 		AccessToken:  credentials.AccessToken,
 		RefreshToken: credentials.RefreshToken,
 		LastRefresh:  credentials.LastRefresh,
 	})
 }
 
-func claudeIdentityToken(accountID, email string) string {
+func randomClaudeDeviceID() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate Claude device ID: %w", err)
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
+func claudeIdentityToken(credentials claudeCredentials) string {
 	payload, _ := json.Marshal(struct {
-		Email string `json:"email"`
-		Auth  struct {
-			AccountID string `json:"chatgpt_account_id"`
-			Plan      string `json:"chatgpt_plan_type"`
-		} `json:"https://api.openai.com/auth"`
-	}{Email: email, Auth: struct {
-		AccountID string `json:"chatgpt_account_id"`
-		Plan      string `json:"chatgpt_plan_type"`
-	}{AccountID: accountID, Plan: "claude"}})
-	return "x." + base64.RawURLEncoding.EncodeToString(payload) + ".x"
+		Provider         string `json:"provider"`
+		AccountID        string `json:"account_id"`
+		Email            string `json:"email"`
+		OrganizationID   string `json:"organization_id"`
+		OrganizationName string `json:"organization_name"`
+		DeviceID         string `json:"device_id"`
+	}{Provider: "claude", AccountID: credentials.AccountID, Email: credentials.Email,
+		OrganizationID: credentials.OrganizationID, OrganizationName: credentials.OrganizationName,
+		DeviceID: credentials.DeviceID})
+	return string(payload)
 }
 
 func mergeClaudeProfile(credentials *claudeCredentials, profile *claudeOAuthProfile) {
