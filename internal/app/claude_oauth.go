@@ -111,6 +111,64 @@ type claudeOAuthFlow struct {
 	hc       *http.Client
 }
 
+func parseClaudeOAuthCallback(raw string) (claudeOAuthCallback, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return claudeOAuthCallback{}, errors.New("callback URL is required")
+	}
+	candidate := trimmed
+	if !strings.Contains(candidate, "://") {
+		if strings.HasPrefix(candidate, "?") {
+			candidate = "http://localhost" + candidate
+		} else if strings.ContainsAny(candidate, "/?#") || strings.Contains(candidate, ":") {
+			candidate = "http://" + candidate
+		} else if strings.Contains(candidate, "=") {
+			candidate = "http://localhost/?" + candidate
+		} else {
+			return claudeOAuthCallback{}, errors.New("invalid callback URL")
+		}
+	}
+	parsed, err := url.Parse(candidate)
+	if err != nil || parsed.Host == "" {
+		return claudeOAuthCallback{}, errors.New("invalid callback URL")
+	}
+	query := parsed.Query()
+	result := claudeOAuthCallback{
+		code:  strings.TrimSpace(query.Get("code")),
+		state: strings.TrimSpace(query.Get("state")),
+		err:   strings.TrimSpace(query.Get("error")),
+	}
+	if result.err == "" {
+		result.err = strings.TrimSpace(query.Get("error_description"))
+	}
+	if parsed.Fragment != "" {
+		fragment, err := url.ParseQuery(parsed.Fragment)
+		if err == nil {
+			if result.code == "" {
+				result.code = strings.TrimSpace(fragment.Get("code"))
+			}
+			if result.state == "" {
+				result.state = strings.TrimSpace(fragment.Get("state"))
+			}
+			if result.err == "" {
+				result.err = strings.TrimSpace(fragment.Get("error"))
+			}
+		}
+	}
+	if result.code != "" && result.state == "" && strings.Contains(result.code, "#") {
+		parts := strings.SplitN(result.code, "#", 2)
+		result.code = parts[0]
+		result.state = parts[1]
+	}
+	if result.code == "" && result.err == "" {
+		return claudeOAuthCallback{}, errors.New("callback URL missing code")
+	}
+	if result.state == "" {
+		return claudeOAuthCallback{}, errors.New("callback URL missing state")
+	}
+	return result, nil
+}
+
 func newClaudePKCE() (claudePKCE, error) {
 	verifierBytes := make([]byte, 96)
 	if _, err := rand.Read(verifierBytes); err != nil {
@@ -226,6 +284,24 @@ func (f *claudeOAuthFlow) wait(ctx context.Context) (*claudeCredentials, error) 
 	}
 }
 
+func (f *claudeOAuthFlow) submit(result claudeOAuthCallback) error {
+	if f == nil {
+		return errors.New("Claude OAuth flow is unavailable")
+	}
+	if result.state != f.state {
+		return errors.New("Claude OAuth state mismatch")
+	}
+	accepted := false
+	f.once.Do(func() {
+		accepted = true
+		f.callback <- result
+	})
+	if !accepted {
+		return errors.New("Claude OAuth callback was already received")
+	}
+	return nil
+}
+
 func (f *claudeOAuthFlow) stop() {
 	if f == nil || f.server == nil {
 		return
@@ -245,8 +321,13 @@ func (f *claudeOAuthFlow) handler() http.Handler {
 		if result.err == "" {
 			result.err = query.Get("error_description")
 		}
-		f.once.Do(func() { f.callback <- result })
+		if err := f.submit(result); err != nil {
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
 		if result.err != "" {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = io.WriteString(w, "Claude sign-in failed: "+html.EscapeString(result.err))

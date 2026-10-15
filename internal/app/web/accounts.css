@@ -69,6 +69,31 @@ h1 {
   text-decoration: none;
 }
 
+.callback {
+  display: grid;
+  gap: .75rem;
+}
+
+.callback label {
+  font-size: .95rem;
+  font-weight: 700;
+}
+
+.callback input {
+  background: var(--background-alt);
+  border: 2px solid transparent;
+  border-radius: .75rem;
+  color: var(--text-main);
+  font: inherit;
+  padding: .9rem 1rem;
+  width: 100%;
+}
+
+.callback input:focus {
+  border-color: var(--links);
+  outline: none;
+}
+
 @media (max-width: 36rem) {
   .code {
     align-items: flex-start;

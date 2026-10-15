@@ -52,6 +52,48 @@ func TestClaudeAuthorizationURL(t *testing.T) {
 	}
 }
 
+func TestParseClaudeOAuthCallback(t *testing.T) {
+	tests := []struct {
+		name  string
+		raw   string
+		code  string
+		state string
+	}{
+		{name: "full URL", raw: "http://localhost:54545/callback?code=code-value&state=state-value", code: "code-value", state: "state-value"},
+		{name: "query only", raw: "?code=code-value&state=state-value", code: "code-value", state: "state-value"},
+		{name: "fragment state", raw: "http://localhost:54545/callback?code=code-value%23state-value", code: "code-value", state: "state-value"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseClaudeOAuthCallback(test.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.code != test.code || got.state != test.state {
+				t.Fatalf("callback = %+v, want code=%q state=%q", got, test.code, test.state)
+			}
+		})
+	}
+}
+
+func TestClaudeOAuthFlowRejectsWrongStateBeforeConsumingCallback(t *testing.T) {
+	flow := &claudeOAuthFlow{state: "expected", callback: make(chan claudeOAuthCallback, 1)}
+	if err := flow.submit(claudeOAuthCallback{code: "code", state: "wrong"}); err == nil {
+		t.Fatal("submit accepted callback with wrong state")
+	}
+	if err := flow.submit(claudeOAuthCallback{code: "code", state: "expected"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-flow.callback:
+		if result.code != "code" {
+			t.Fatalf("code = %q", result.code)
+		}
+	default:
+		t.Fatal("callback was not delivered")
+	}
+}
+
 func TestExchangeClaudeCodeUsesNativeRequestAndProfileMetadata(t *testing.T) {
 	var tokenBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

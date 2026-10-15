@@ -17,6 +17,12 @@
 <small>Click to copy</small>
 </button>{{end}}
 <a class="sign-in" href="{{.VerificationURL}}" target="_blank" rel="noreferrer">Open sign-in</a>
+<p class="lead">If sign-in sends your browser to a localhost callback, copy that full address and paste it below.</p>
+<form class="callback" action="/accounts/callback" method="post">
+<label for="callback-url">Callback address</label>
+<input id="callback-url" name="callback_url" type="url" inputmode="url" autocomplete="off" spellcheck="false" required>
+<button class="sign-in" type="submit">Complete sign-in</button>
+</form>
 </main>
 <script src="{{dashboardAssetURL "accounts.js"}}"></script>
 </body>

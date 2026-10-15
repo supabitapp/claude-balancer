@@ -55,6 +55,18 @@ func (s *accountLoginStore) status() (bool, bool) {
 	return s.active != nil, s.completed
 }
 
+func (s *accountLoginStore) submitClaudeCallback(result claudeOAuthCallback) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil || s.active.claudeFlow == nil {
+		return errors.New("no Claude sign-in is waiting for a callback")
+	}
+	if !s.active.expiresAt.IsZero() && time.Now().After(s.active.expiresAt) {
+		return errors.New("Claude sign-in has expired; start again")
+	}
+	return s.active.claudeFlow.submit(result)
+}
+
 type accountLoginPageData struct {
 	VerificationURL string
 	UserCode        string
@@ -136,6 +148,52 @@ func (s *server) accountLoginStatus(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	http.Error(w, "account sign-in failed", http.StatusGone)
+}
+
+func (s *server) accountLoginCallback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	var result claudeOAuthCallback
+	var err error
+	switch r.Method {
+	case http.MethodGet:
+		result, err = parseClaudeOAuthCallback("http://localhost" + r.URL.RequestURI())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	case http.MethodPost:
+		if err = func() error {
+			r.Body = http.MaxBytesReader(w, r.Body, 4096)
+			if err := r.ParseForm(); err != nil {
+				return errors.New("invalid callback form")
+			}
+			result, err = parseClaudeOAuthCallback(r.PostForm.Get("callback_url"))
+			return err
+		}(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if result.state == "" {
+		err = errors.New("callback is missing state")
+	} else {
+		err = s.logins.submitClaudeCallback(result)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("Claude sign-in received. You can return to the balancer."))
+		return
+	}
+	http.Redirect(w, r, "/accounts", http.StatusSeeOther)
 }
 
 func minutesUntil(now, deadline time.Time) int {

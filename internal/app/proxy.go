@@ -58,6 +58,8 @@ func (s *server) routes() http.Handler {
 	})
 	mux.HandleFunc("GET /accounts", s.accountsPage)
 	mux.HandleFunc("GET /accounts/status", s.accountLoginStatus)
+	mux.HandleFunc("GET /callback", s.accountLoginCallback)
+	mux.HandleFunc("POST /accounts/callback", s.accountLoginCallback)
 	mux.HandleFunc(
 		"GET /dashboard/assets/admin.css",
 		webAsset("web/admin.css", "text/css; charset=utf-8", "public, max-age=31536000, immutable"),
