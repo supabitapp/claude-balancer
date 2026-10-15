@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -32,7 +34,20 @@ var (
 	claudeOAuthTokenURL     = "https://platform.claude.com/v1/oauth/token"
 	claudeOAuthProfileURL   = "https://api.anthropic.com/api/oauth/profile"
 	claudeOAuthRolesURL     = "https://api.anthropic.com/api/oauth/claude_cli/roles"
+	claudeRefreshGroup      singleflight.Group
+	claudeRefreshBlockMu    sync.Mutex
+	claudeRefreshBlocked    = make(map[string]time.Time)
 )
+
+type claudeOAuthHTTPError struct {
+	status     int
+	body       string
+	retryAfter time.Duration
+}
+
+func (e *claudeOAuthHTTPError) Error() string {
+	return fmt.Sprintf("Claude OAuth endpoint returned status %d: %s", e.status, e.body)
+}
 
 type claudePKCE struct {
 	verifier  string
@@ -266,6 +281,32 @@ func refreshClaudeToken(ctx context.Context, hc *http.Client, refreshToken strin
 	if strings.TrimSpace(refreshToken) == "" {
 		return nil, errors.New("Claude refresh token is required")
 	}
+	claudeRefreshBlockMu.Lock()
+	blockedUntil := claudeRefreshBlocked[refreshToken]
+	claudeRefreshBlockMu.Unlock()
+	if blockedUntil.After(time.Now()) {
+		return nil, fmt.Errorf("Claude refresh temporarily blocked until %s", blockedUntil.Format(time.RFC3339))
+	}
+	result, err, _ := claudeRefreshGroup.Do(refreshToken, func() (any, error) {
+		refreshCtx := context.Background()
+		if ctx != nil {
+			refreshCtx = context.WithoutCancel(ctx)
+		}
+		refreshCtx, cancel := context.WithTimeout(refreshCtx, 30*time.Second)
+		defer cancel()
+		return refreshClaudeTokenOnce(refreshCtx, hc, refreshToken)
+	})
+	if err != nil {
+		return nil, err
+	}
+	credentials, ok := result.(*claudeCredentials)
+	if !ok || credentials == nil {
+		return nil, errors.New("Claude refresh returned invalid credentials")
+	}
+	return credentials, nil
+}
+
+func refreshClaudeTokenOnce(ctx context.Context, hc *http.Client, refreshToken string) (*claudeCredentials, error) {
 	body := struct {
 		ClientID     string `json:"client_id"`
 		GrantType    string `json:"grant_type"`
@@ -274,8 +315,17 @@ func refreshClaudeToken(ctx context.Context, hc *http.Client, refreshToken strin
 	}{claudeOAuthClientID, "refresh_token", refreshToken, claudeOAuthScope}
 	var response claudeOAuthTokenResponse
 	if err := postClaudeOAuthJSON(ctx, hc, claudeOAuthTokenURL, body, &response); err != nil {
+		var httpErr *claudeOAuthHTTPError
+		if errors.As(err, &httpErr) && httpErr.status == http.StatusTooManyRequests {
+			claudeRefreshBlockMu.Lock()
+			claudeRefreshBlocked[refreshToken] = time.Now().Add(claudeRetryAfter(httpErr.retryAfter))
+			claudeRefreshBlockMu.Unlock()
+		}
 		return nil, err
 	}
+	claudeRefreshBlockMu.Lock()
+	delete(claudeRefreshBlocked, refreshToken)
+	claudeRefreshBlockMu.Unlock()
 	credentials := claudeCredentialsFromToken(response, time.Now())
 	if credentials.RefreshToken == "" {
 		credentials.RefreshToken = refreshToken
@@ -315,12 +365,49 @@ func postClaudeOAuthJSON(ctx context.Context, hc *http.Client, endpoint string, 
 		return err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("token endpoint returned %s: %s", resp.Status, strings.TrimSpace(string(payload)))
+		return &claudeOAuthHTTPError{status: resp.StatusCode, body: strings.TrimSpace(string(payload)), retryAfter: parseClaudeRetryAfter(resp)}
 	}
 	if err := json.Unmarshal(payload, into); err != nil {
 		return fmt.Errorf("decode Claude OAuth response: %w", err)
 	}
 	return nil
+}
+
+func parseClaudeRetryAfter(resp *http.Response) time.Duration {
+	if resp == nil {
+		return 5 * time.Second
+	}
+	if raw := strings.TrimSpace(resp.Header.Get("Retry-After-Ms")); raw != "" {
+		if value, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return clampClaudeRetryAfter(time.Duration(value) * time.Millisecond)
+		}
+	}
+	if raw := strings.TrimSpace(resp.Header.Get("Retry-After")); raw != "" {
+		if seconds, err := strconv.ParseFloat(raw, 64); err == nil {
+			return clampClaudeRetryAfter(time.Duration(seconds * float64(time.Second)))
+		}
+		if when, err := http.ParseTime(raw); err == nil {
+			return clampClaudeRetryAfter(time.Until(when))
+		}
+	}
+	return 5 * time.Second
+}
+
+func clampClaudeRetryAfter(value time.Duration) time.Duration {
+	if value < 5*time.Second {
+		return 5 * time.Second
+	}
+	if value > 5*time.Minute {
+		return 5 * time.Minute
+	}
+	return value
+}
+
+func claudeRetryAfter(value time.Duration) time.Duration {
+	if value <= 0 {
+		return 5 * time.Second
+	}
+	return clampClaudeRetryAfter(value)
 }
 
 func fetchClaudeOAuthProfile(ctx context.Context, hc *http.Client, accessToken string) (*claudeOAuthProfile, error) {
@@ -453,6 +540,10 @@ func claudeCredentialsFromIdentityToken(token string) claudeCredentials {
 func claudeRefreshPermanent(err error) bool {
 	if err == nil {
 		return false
+	}
+	var httpErr *claudeOAuthHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.status == http.StatusUnauthorized || strings.Contains(strings.ToLower(httpErr.body), "invalid_grant")
 	}
 	reason := strings.ToLower(err.Error())
 	for _, marker := range []string{"invalid_grant", "invalid_token", "refresh_token_expired", "refresh_token_reused", "refresh_token_invalidated"} {

@@ -180,3 +180,35 @@ func TestExchangeAccountRefreshTokenMarksClaudeInvalidGrantPermanent(t *testing.
 		t.Fatalf("refresh = %v (permanent=%v), want permanent invalid_grant", err, permanent)
 	}
 }
+
+func TestRefreshClaudeTokenBlocksRetryAfterRateLimit(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"error":"rate_limited"}`)
+	}))
+	t.Cleanup(server.Close)
+	oldToken, oldProfile := claudeOAuthTokenURL, claudeOAuthProfileURL
+	claudeOAuthTokenURL = server.URL
+	claudeOAuthProfileURL = server.URL
+	t.Cleanup(func() {
+		claudeOAuthTokenURL, claudeOAuthProfileURL = oldToken, oldProfile
+		claudeRefreshBlockMu.Lock()
+		delete(claudeRefreshBlocked, "rate-limited-refresh")
+		claudeRefreshBlockMu.Unlock()
+	})
+
+	_, firstErr := refreshClaudeToken(context.Background(), server.Client(), "rate-limited-refresh")
+	if firstErr == nil {
+		t.Fatal("first refresh unexpectedly succeeded")
+	}
+	_, secondErr := refreshClaudeToken(context.Background(), server.Client(), "rate-limited-refresh")
+	if secondErr == nil || !strings.Contains(secondErr.Error(), "temporarily blocked") {
+		t.Fatalf("second refresh = %v, want temporary block", secondErr)
+	}
+	if calls != 1 {
+		t.Fatalf("token endpoint calls = %d, want 1", calls)
+	}
+}
