@@ -278,6 +278,12 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(response.StatusCode)
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			s.recordClaudeRoute(route, parsed.Model, account)
+			if s.stats != nil && !strings.HasSuffix(r.URL.Path, "/count_tokens") {
+				var responseBody bytes.Buffer
+				_, _ = io.CopyN(io.MultiWriter(w, &responseBody), response.Body, claudeMaxResponseBody)
+				s.stats.recordClaudeResponse(time.Now(), claudeAccountID(account), parsed.Model, claudeResponseUsage(responseBody.Bytes()))
+				return
+			}
 		}
 		_, _ = io.CopyN(w, response.Body, claudeMaxResponseBody)
 		if response.StatusCode < 200 || response.StatusCode >= 300 {

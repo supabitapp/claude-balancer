@@ -119,6 +119,55 @@ func TestClaudeCountTokensForwardsBodyWithoutMetadata(t *testing.T) {
 	}
 }
 
+func TestClaudeMessagesRecordStats(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"msg_test","model":"claude-haiku-5-5","usage":{"input_tokens":11,"cache_creation_input_tokens":2,"cache_read_input_tokens":3,"output_tokens":4}}`)
+	}))
+	t.Cleanup(upstream.Close)
+
+	account := accountFromState(accountState{
+		IDToken:     claudeIdentityToken(claudeCredentials{AccountID: "account-uuid", DeviceID: "device-id"}),
+		AccessToken: "access-token",
+	})
+	srv := newTestServer(t, []*Account{account})
+	srv.upstream = upstream.URL
+	srv.lookupAPIKey = func(string) (string, bool, error) { return "test", true, nil }
+
+	body := `{"model":"claude-haiku-5-5","max_tokens":16,"messages":[{"role":"user","content":"Reply with exactly OK."}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	srv.claudeMessagesHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	snapshot := srv.stats.snapshot()
+	if snapshot.Turns != 1 {
+		t.Fatalf("turns = %d, want 1", snapshot.Turns)
+	}
+	traffic, ok := snapshot.Accounts[account.id()]
+	if !ok {
+		t.Fatalf("missing stats for account %q", account.id())
+	}
+	if traffic.Turns != 1 || activityTotal(traffic.Activity) != 1 {
+		t.Fatalf("account traffic = turns %d activity %d, want 1 and 1", traffic.Turns, activityTotal(traffic.Activity))
+	}
+	if snapshot.MonthlyUsage.InputTokens != 11 || snapshot.MonthlyUsage.OutputTokens != 4 || snapshot.MonthlyUsage.InputDetails.CachedTokens != 3 || snapshot.MonthlyUsage.InputDetails.CacheWriteTokens != 2 {
+		t.Fatalf("monthly usage = %+v, want input 11 cached 3 cache-write 2 output 4", snapshot.MonthlyUsage)
+	}
+}
+
+func TestClaudeResponseUsageParsesStream(t *testing.T) {
+	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11,\"cache_read_input_tokens\":3}}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4}}\n\n"
+	usage := claudeResponseUsage([]byte(body))
+	if usage.InputTokens != 11 || usage.OutputTokens != 4 || usage.InputDetails.CachedTokens != 3 || usage.TotalTokens != 15 {
+		t.Fatalf("stream usage = %+v, want input 11 cached 3 output 4 total 15", usage)
+	}
+}
+
 func TestClaudeMessagesReportsModelCooldown(t *testing.T) {
 	account := testAccount("account-uuid", 10)
 	account.coolModel("claude-sonnet", nil)
