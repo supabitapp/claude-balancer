@@ -147,7 +147,11 @@ func claudeBodyForAccount(body []byte, account *Account, route claudeRoute) []by
 	if err != nil {
 		return body
 	}
-	metadata["user_id"] = encoded
+	userID, err := json.Marshal(string(encoded))
+	if err != nil {
+		return body
+	}
+	metadata["user_id"] = userID
 	metadataBytes, err := json.Marshal(metadata)
 	if err != nil {
 		return body
@@ -316,8 +320,7 @@ func (s *server) claudeModels(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		copyClaudeRequestHeaders(request.Header, r.Header)
-		request.Header.Set("Authorization", "Bearer "+account.persisted().AccessToken)
-		request.Header.Set("Accept", "application/json")
+		setClaudeUpstreamHeaders(request.Header, account.persisted().AccessToken)
 		response, err := client.Do(request)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "Claude models request failed")
@@ -458,24 +461,8 @@ func (s *server) doClaudeMessages(ctx context.Context, inbound *http.Request, bo
 	}
 	copyClaudeRequestHeaders(request.Header, inbound.Header)
 	state := account.persisted()
-	request.Header.Set("Authorization", "Bearer "+state.AccessToken)
+	setClaudeUpstreamHeaders(request.Header, state.AccessToken)
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", inbound.Header.Get("Accept"))
-	if request.Header.Get("Accept") == "" {
-		request.Header.Set("Accept", "application/json")
-	}
-	if request.Header.Get("Anthropic-Version") == "" {
-		request.Header.Set("Anthropic-Version", "2023-06-01")
-	}
-	if request.Header.Get("Anthropic-Beta") == "" {
-		request.Header.Set("Anthropic-Beta", "oauth-2025-04-20")
-	}
-	if request.Header.Get("Anthropic-Dangerous-Direct-Browser-Access") == "" {
-		request.Header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
-	}
-	if request.Header.Get("X-App") == "" {
-		request.Header.Set("X-App", "cli")
-	}
 	if route.session != "" && request.Header.Get("X-Claude-Code-Session-Id") == "" {
 		request.Header.Set("X-Claude-Code-Session-Id", route.session)
 	}
@@ -514,6 +501,25 @@ func claudeMessagesURLForPath(base, requestPath string) (string, error) {
 		u.Path = path + "/v1" + suffix
 	}
 	return u.String(), nil
+}
+
+func setClaudeUpstreamHeaders(header http.Header, accessToken string) {
+	header.Set("Authorization", "Bearer "+accessToken)
+	if header.Get("Accept") == "" {
+		header.Set("Accept", "application/json")
+	}
+	if header.Get("Anthropic-Version") == "" {
+		header.Set("Anthropic-Version", "2023-06-01")
+	}
+	if header.Get("Anthropic-Beta") == "" {
+		header.Set("Anthropic-Beta", "oauth-2025-04-20")
+	}
+	if header.Get("Anthropic-Dangerous-Direct-Browser-Access") == "" {
+		header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
+	}
+	if header.Get("X-App") == "" {
+		header.Set("X-App", "cli")
+	}
 }
 
 func copyClaudeRequestHeaders(dst, src http.Header) {
