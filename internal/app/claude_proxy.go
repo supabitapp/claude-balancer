@@ -184,6 +184,9 @@ func (s *server) claudeRouteOwners(route claudeRoute) ([]string, error) {
 }
 
 func (s *server) selectClaudeAccount(owners []string, skip map[string]bool) *Account {
+	if s == nil || s.pool == nil {
+		return nil
+	}
 	now := time.Now()
 	accounts := s.pool.all()
 	eligible := func(a *Account) bool {
