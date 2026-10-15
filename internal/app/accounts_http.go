@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"html/template"
 	"net/http"
 	"sync"
@@ -10,8 +11,10 @@ import (
 )
 
 type accountLogin struct {
-	device    deviceAuthorization
-	expiresAt time.Time
+	device          deviceAuthorization
+	expiresAt       time.Time
+	claudeFlow      *claudeOAuthFlow
+	verificationURL string
 }
 
 type accountLoginStore struct {
@@ -39,6 +42,22 @@ func (s *accountLoginStore) getOrCreate(create func() (deviceAuthorization, erro
 	return login, true, nil
 }
 
+func (s *accountLoginStore) getOrCreateClaude(create func() (*claudeOAuthFlow, string, error)) (accountLogin, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active != nil {
+		return *s.active, false, nil
+	}
+	flow, link, err := create()
+	if err != nil {
+		return accountLogin{}, false, err
+	}
+	login := accountLogin{claudeFlow: flow, verificationURL: link, expiresAt: time.Now().Add(deviceAuthTimeout)}
+	s.active = &login
+	s.completed = false
+	return login, true, nil
+}
+
 func (s *accountLoginStore) release(authID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -51,6 +70,15 @@ func (s *accountLoginStore) finish(authID string, completed bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.active != nil && s.active.device.authID == authID {
+		s.active = nil
+		s.completed = completed
+	}
+}
+
+func (s *accountLoginStore) finishClaude(flow *claudeOAuthFlow, completed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active != nil && s.active.claudeFlow == flow {
 		s.active = nil
 		s.completed = completed
 	}
@@ -70,13 +98,8 @@ type accountLoginPageData struct {
 var accountLoginPage = template.Must(webTemplate("accounts.html").ParseFS(dashboardFiles, "web/accounts.html"))
 
 func (s *server) accountsPage(w http.ResponseWriter, r *http.Request) {
-	issuer := s.accountAuthIssuer()
-	login, created, err := s.logins.getOrCreate(func() (deviceAuthorization, error) {
-		return requestDeviceAuthorization(
-			r.Context(),
-			s.client,
-			deviceAuthIssuer(issuer)+"/api/accounts/deviceauth/usercode",
-		)
+	login, created, err := s.logins.getOrCreateClaude(func() (*claudeOAuthFlow, string, error) {
+		return startClaudeLogin(s.client, claudeOAuthPort)
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -84,11 +107,16 @@ func (s *server) accountsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	var page bytes.Buffer
 	if err := accountLoginPage.Execute(&page, accountLoginPageData{
-		VerificationURL: deviceVerificationURL(issuer),
-		UserCode:        login.device.userCode,
+		VerificationURL: login.verificationURL,
+		UserCode:        "",
 	}); err != nil {
 		if created {
-			s.logins.release(login.device.authID)
+			if login.claudeFlow != nil {
+				login.claudeFlow.stop()
+				s.logins.finishClaude(login.claudeFlow, false)
+			} else {
+				s.logins.release(login.device.authID)
+			}
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -98,7 +126,7 @@ func (s *server) accountsPage(w http.ResponseWriter, r *http.Request) {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		go s.completeAccountLogin(ctx, issuer, login.device)
+		go s.completeClaudeAccountLogin(ctx, login.claudeFlow)
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -107,6 +135,28 @@ func (s *server) accountsPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Write(page.Bytes())
+}
+
+func (s *server) completeClaudeAccountLogin(ctx context.Context, flow *claudeOAuthFlow) {
+	credentials, err := flow.wait(ctx)
+	flow.stop()
+	if credentials == nil && err == nil {
+		err = errors.New("Claude sign-in returned no credentials")
+	}
+	if err == nil {
+		err = s.pool.add(accountFromClaudeCredentials(credentials))
+	}
+	if err != nil {
+		s.logins.finishClaude(flow, false)
+		if s.stats != nil {
+			s.stats.note("account login failed", "", err.Error())
+		}
+		return
+	}
+	s.logins.finishClaude(flow, true)
+	if s.stats != nil {
+		s.stats.note("account added", credentials.AccountID, "")
+	}
 }
 
 func (s *server) accountLoginStatus(w http.ResponseWriter, _ *http.Request) {
