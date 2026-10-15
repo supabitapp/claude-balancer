@@ -870,10 +870,27 @@ func dashboardResetInfo(now time.Time, credits []resetCreditStatsResponse) strin
 }
 
 func dashboardPlan(plan string) string {
-	if plan == "self_serve_business_prolite" {
+	switch strings.ToLower(strings.TrimSpace(plan)) {
+	case "":
+		return "--"
+	case "default_claude_max_20x":
+		return "Max 20x"
+	case "default_claude_max_5x":
+		return "Max 5x"
+	case "default_claude_pro":
+		return "Pro"
+	case "claude_max":
+		return "Max"
+	case "claude_pro":
+		return "Pro"
+	case "self_serve_business_prolite":
 		return "business_prolite"
+	default:
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(plan)), "default_claude_max_") {
+			return "Max " + strings.TrimPrefix(strings.ToLower(strings.TrimSpace(plan)), "default_claude_max_")
+		}
+		return plan
 	}
-	return plan
 }
 
 func dashboardStatus(status accountStatus) dashboardStatusView {

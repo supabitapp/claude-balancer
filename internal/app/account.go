@@ -51,6 +51,7 @@ type Account struct {
 	credits         *creditsPayload
 	creditsRejected bool
 	usageFetchedAt  time.Time
+	planFetchedAt   time.Time
 	lastUsed        time.Time
 }
 
@@ -265,6 +266,7 @@ func (a *Account) applyPersisted(next accountState) bool {
 type authClaims struct {
 	Provider         string `json:"provider"`
 	Email            string `json:"email"`
+	PlanType         string `json:"plan_type"`
 	AccountID        string `json:"account_id"`
 	OrganizationID   string `json:"organization_id"`
 	OrganizationName string `json:"organization_name"`
@@ -303,9 +305,6 @@ func claimsFromToken(token string) authClaims {
 	}
 	if c.Auth.AccountID == "" {
 		c.Auth.AccountID = c.AccountID
-	}
-	if c.Auth.Plan == "" && c.Provider != "" {
-		c.Auth.Plan = c.Provider
 	}
 	return c
 }
@@ -385,7 +384,44 @@ func (a *Account) plan() string {
 	if a.planType != "" {
 		return a.planType
 	}
-	return claimsFromToken(a.IDToken).Auth.Plan
+	claims := claimsFromToken(a.IDToken)
+	if claims.PlanType != "" {
+		return claims.PlanType
+	}
+	return claims.Auth.Plan
+}
+
+func (a *Account) setPlanType(plan string) bool {
+	plan = strings.TrimSpace(plan)
+	if plan == "" {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !strings.EqualFold(claimsFromToken(a.IDToken).Provider, "claude") {
+		return false
+	}
+	credentials := claudeCredentialsFromIdentityToken(a.IDToken)
+	if credentials.PlanType == plan {
+		a.planType = plan
+		return false
+	}
+	credentials.PlanType = plan
+	a.planType = plan
+	a.IDToken = claudeIdentityToken(credentials)
+	return true
+}
+
+func (a *Account) planMetadataDue(now time.Time) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.planFetchedAt.IsZero() || now.Sub(a.planFetchedAt) >= accountDetailRefreshInterval
+}
+
+func (a *Account) markPlanMetadataFetched(at time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.planFetchedAt = at
 }
 
 func (a *Account) paused() bool {

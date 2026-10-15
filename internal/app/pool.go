@@ -297,6 +297,9 @@ func (a *Account) routingCandidate() routingCandidate {
 	claims := claimsFromToken(a.IDToken)
 	plan := a.planType
 	if plan == "" {
+		plan = claims.PlanType
+	}
+	if plan == "" {
 		plan = claims.Auth.Plan
 	}
 	id := claims.Auth.AccountID

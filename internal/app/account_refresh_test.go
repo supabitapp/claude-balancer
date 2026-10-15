@@ -29,6 +29,25 @@ func TestClaudeAccountWithoutQuotaSnapshotIsLive(t *testing.T) {
 	}
 }
 
+func TestClaudePlanUsesPersistedSubscriptionTier(t *testing.T) {
+	account := accountFromState(accountState{
+		IDToken: claudeIdentityToken(claudeCredentials{AccountID: "account", PlanType: "default_claude_max_20x"}),
+	})
+	if got := account.plan(); got != "default_claude_max_20x" {
+		t.Fatalf("plan = %q, want default_claude_max_20x", got)
+	}
+	if got := claudeCredentialsFromIdentityToken(account.persisted().IDToken).PlanType; got != "default_claude_max_20x" {
+		t.Fatalf("persisted plan = %q, want default_claude_max_20x", got)
+	}
+}
+
+func TestClaudePlanDoesNotFallBackToProviderName(t *testing.T) {
+	account := accountFromState(accountState{IDToken: claudeIdentityToken(claudeCredentials{AccountID: "account"})})
+	if got := account.plan(); got != "" {
+		t.Fatalf("plan = %q, want empty until subscription metadata is available", got)
+	}
+}
+
 func TestAccountRefreshDueUsesAccessTokenExpiry(t *testing.T) {
 	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
 	for _, test := range []struct {

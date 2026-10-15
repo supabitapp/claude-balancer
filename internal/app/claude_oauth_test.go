@@ -111,7 +111,7 @@ func TestExchangeClaudeCodeUsesNativeRequestAndProfileMetadata(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer access" {
 				t.Fatalf("profile authorization = %q", r.Header.Get("Authorization"))
 			}
-			io.WriteString(w, `{"account":{"uuid":"profile-account","email":"profile@example.com"},"organization":{"uuid":"profile-org","name":"Profile Org"}}`)
+			io.WriteString(w, `{"account":{"uuid":"profile-account","email":"profile@example.com","has_claude_max":true},"organization":{"uuid":"profile-org","name":"Profile Org","organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x","billing_type":"stripe_subscription","subscription_status":"active"}}`)
 			return
 		}
 		http.NotFound(w, r)
@@ -132,7 +132,7 @@ func TestExchangeClaudeCodeUsesNativeRequestAndProfileMetadata(t *testing.T) {
 	if got := tokenBody["grant_type"]; got != "authorization_code" {
 		t.Fatalf("grant_type = %v", got)
 	}
-	if credentials.AccountID != "profile-account" || credentials.Email != "profile@example.com" || credentials.OrganizationID != "profile-org" || credentials.OrganizationName != "Profile Org" {
+	if credentials.AccountID != "profile-account" || credentials.Email != "profile@example.com" || credentials.PlanType != "default_claude_max_20x" || credentials.OrganizationID != "profile-org" || credentials.OrganizationName != "Profile Org" {
 		t.Fatalf("profile metadata = %+v", credentials)
 	}
 	if credentials.ExpiresAt.Before(time.Now().Add(50 * time.Minute)) {

@@ -183,6 +183,12 @@ func (s *server) pollUsage(ctx context.Context, account *Account) error {
 		payload.SpendControl,
 		payload.Credits,
 	)
+	if err := s.persistClaudePlan(ctx, account, payload.PlanType); err != nil && ctx.Err() == nil {
+		s.log.Debug("plan metadata persistence failed", "account", account.id(), "error", err)
+	}
+	if err := s.pollClaudePlan(ctx, account); err != nil && ctx.Err() == nil {
+		s.log.Debug("plan metadata poll failed", "account", account.id(), "error", err)
+	}
 	var limitReached any
 	if payload.RateLimit.LimitReached != nil {
 		limitReached = *payload.RateLimit.LimitReached
@@ -196,6 +202,54 @@ func (s *server) pollUsage(ctx context.Context, account *Account) error {
 	attrs := []any{"reported_limit_reached", limitReached}
 	attrs = append(attrs, routingLogAttrs(account.routingCandidate(), time.Now())...)
 	s.log.Debug("usage polled", attrs...)
+	return nil
+}
+
+func (s *server) pollClaudePlan(ctx context.Context, account *Account) error {
+	if !strings.EqualFold(account.claims().Provider, "claude") || !account.planMetadataDue(time.Now()) {
+		return nil
+	}
+	resp, err := s.doAccountRequest(ctx, account, http.MethodGet, claudeOAuthProfileURL, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("profile returned %s", resp.Status)
+	}
+	var profile claudeOAuthProfile
+	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
+		return err
+	}
+	account.markPlanMetadataFetched(time.Now())
+	plan := claudeProfilePlan(&profile)
+	if plan == "" {
+		return nil
+	}
+	if err := s.persistClaudePlan(ctx, account, plan); err != nil {
+		return err
+	}
+	if s.pool != nil {
+		for _, current := range s.pool.all() {
+			if current.id() == account.id() {
+				current.markPlanMetadataFetched(time.Now())
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (s *server) persistClaudePlan(ctx context.Context, account *Account, plan string) error {
+	if !account.setPlanType(plan) {
+		return nil
+	}
+	if s.pool == nil {
+		return nil
+	}
+	if _, err := s.pool.persistAccountStateContext(ctx, account.persisted()); err != nil {
+		return fmt.Errorf("persist plan metadata: %w", err)
+	}
 	return nil
 }
 

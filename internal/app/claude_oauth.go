@@ -61,6 +61,7 @@ type claudeCredentials struct {
 	RefreshToken     string
 	AccountID        string
 	Email            string
+	PlanType         string
 	OrganizationID   string
 	OrganizationName string
 	DeviceID         string
@@ -85,12 +86,18 @@ type claudeOAuthTokenResponse struct {
 
 type claudeOAuthProfile struct {
 	Account struct {
-		ID    string `json:"uuid"`
-		Email string `json:"email"`
+		ID           string `json:"uuid"`
+		Email        string `json:"email"`
+		HasClaudeMax bool   `json:"has_claude_max"`
+		HasClaudePro bool   `json:"has_claude_pro"`
 	} `json:"account"`
 	Organization struct {
-		ID   string `json:"uuid"`
-		Name string `json:"name"`
+		ID                 string `json:"uuid"`
+		Name               string `json:"name"`
+		OrganizationType   string `json:"organization_type"`
+		BillingType        string `json:"billing_type"`
+		RateLimitTier      string `json:"rate_limit_tier"`
+		SubscriptionStatus string `json:"subscription_status"`
 	} `json:"organization"`
 }
 
@@ -598,6 +605,9 @@ func exchangeAccountRefreshToken(ctx context.Context, hc *http.Client, state acc
 	if credentials.OrganizationName == "" {
 		credentials.OrganizationName = previous.OrganizationName
 	}
+	if credentials.PlanType == "" {
+		credentials.PlanType = previous.PlanType
+	}
 	if credentials.DeviceID == "" {
 		credentials.DeviceID = previous.DeviceID
 	}
@@ -622,6 +632,7 @@ func claudeCredentialsFromIdentityToken(token string) claudeCredentials {
 	var identity struct {
 		AccountID        string    `json:"account_id"`
 		Email            string    `json:"email"`
+		PlanType         string    `json:"plan_type"`
 		OrganizationID   string    `json:"organization_id"`
 		OrganizationName string    `json:"organization_name"`
 		DeviceID         string    `json:"device_id"`
@@ -631,6 +642,7 @@ func claudeCredentialsFromIdentityToken(token string) claudeCredentials {
 	return claudeCredentials{
 		AccountID:        identity.AccountID,
 		Email:            identity.Email,
+		PlanType:         identity.PlanType,
 		OrganizationID:   identity.OrganizationID,
 		OrganizationName: identity.OrganizationName,
 		DeviceID:         identity.DeviceID,
@@ -668,11 +680,12 @@ func claudeIdentityToken(credentials claudeCredentials) string {
 		Provider         string    `json:"provider"`
 		AccountID        string    `json:"account_id"`
 		Email            string    `json:"email"`
+		PlanType         string    `json:"plan_type,omitempty"`
 		OrganizationID   string    `json:"organization_id"`
 		OrganizationName string    `json:"organization_name"`
 		DeviceID         string    `json:"device_id"`
 		ExpiresAt        time.Time `json:"expires_at,omitempty"`
-	}{Provider: "claude", AccountID: credentials.AccountID, Email: credentials.Email,
+	}{Provider: "claude", AccountID: credentials.AccountID, Email: credentials.Email, PlanType: strings.TrimSpace(credentials.PlanType),
 		OrganizationID: credentials.OrganizationID, OrganizationName: credentials.OrganizationName,
 		DeviceID: credentials.DeviceID, ExpiresAt: credentials.ExpiresAt})
 	return string(payload)
@@ -688,12 +701,36 @@ func mergeClaudeProfile(credentials *claudeCredentials, profile *claudeOAuthProf
 	if profile.Account.Email != "" {
 		credentials.Email = profile.Account.Email
 	}
+	if plan := claudeProfilePlan(profile); plan != "" {
+		credentials.PlanType = plan
+	}
 	if profile.Organization.ID != "" {
 		credentials.OrganizationID = profile.Organization.ID
 	}
 	if profile.Organization.Name != "" {
 		credentials.OrganizationName = profile.Organization.Name
 	}
+}
+
+func claudeProfilePlan(profile *claudeOAuthProfile) string {
+	if profile == nil {
+		return ""
+	}
+	for _, candidate := range []string{
+		profile.Organization.RateLimitTier,
+		profile.Organization.OrganizationType,
+	} {
+		if plan := strings.TrimSpace(candidate); plan != "" {
+			return plan
+		}
+	}
+	if profile.Account.HasClaudeMax {
+		return "claude_max"
+	}
+	if profile.Account.HasClaudePro {
+		return "claude_pro"
+	}
+	return ""
 }
 
 func randomClaudeOAuthToken(size int) (string, error) {
