@@ -146,6 +146,7 @@ func routingLogAttrs(candidate routingCandidate, now time.Time) []any {
 		"reauth", candidate.reauth,
 		"primary", windowLogValue(candidate.primary),
 		"secondary", windowLogValue(candidate.secondary),
+		"fable", windowLogValue(candidate.fable),
 	}
 	if prioritized {
 		attrs = append(attrs,

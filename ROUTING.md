@@ -9,11 +9,13 @@ same account after account-bound work has been sent.
 ## Account selection
 
 Each account has a routing mode (`normal`, `priority`, or `paused`), a
-credential state, model-level cooldowns, and the latest five-hour and seven-day
-usage windows. Selection removes paused, reauthentication-required, and
-cooldown accounts before comparing priority and available capacity. Included
-quota is preferred. A positive credit balance can be used only when no eligible
-account has included quota and spend limits allow it.
+credential state, model-level cooldowns, and the latest five-hour, seven-day,
+and Fable-specific seven-day usage windows. Selection removes paused,
+reauthentication-required, cooldown, and exhausted accounts before comparing
+priority and available capacity. Fable requests also require an account with
+remaining Fable-scoped capacity. Included quota is preferred. A positive
+credit balance can be used only when no eligible account has included quota and
+spend limits allow it.
 
 The established owner of a conversation outranks account priority. The affinity
 key combines provider, model, session ID, and agent ID. The router reads these
@@ -55,6 +57,8 @@ The upstream error determines the scope of a cooldown:
 - A model-level `429` cools down that model on the account.
 - Claude's five-hour or seven-day usage limit cools down the credential across
   models until the advertised reset time.
+- Claude's Fable-scoped seven-day limit only blocks Fable model requests; other
+  models can continue using the account while that window is exhausted.
 - A temporary upstream transport failure is request-scoped and does not poison
   an account.
 - Invalid input, permission errors, and other request-scoped failures are

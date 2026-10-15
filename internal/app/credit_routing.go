@@ -2,8 +2,36 @@ package app
 
 import (
 	"math"
+	"strings"
 	"time"
 )
+
+func isFableModel(model string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(model)), "fable")
+}
+
+func (c routingCandidate) quotaExhausted(model string, now time.Time) bool {
+	if c.primary.exhausted(now) || c.secondary.exhausted(now) {
+		return true
+	}
+	return isFableModel(model) && c.fable.exhausted(now)
+}
+
+func (c routingCandidate) quotaRetryAt(model string, now time.Time) time.Time {
+	var retryAt time.Time
+	for _, candidate := range []window{c.primary, c.secondary} {
+		if !candidate.exhausted(now) || candidate.resetsAt.IsZero() {
+			continue
+		}
+		if retryAt.IsZero() || candidate.resetsAt.Before(retryAt) {
+			retryAt = candidate.resetsAt
+		}
+	}
+	if isFableModel(model) && c.fable.exhausted(now) && !c.fable.resetsAt.IsZero() && (retryAt.IsZero() || c.fable.resetsAt.Before(retryAt)) {
+		retryAt = c.fable.resetsAt
+	}
+	return retryAt
+}
 
 func (c routingCandidate) weeklyExhausted() bool {
 	weekly := longestWindow(c.primary, c.secondary)

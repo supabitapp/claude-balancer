@@ -186,3 +186,29 @@ func TestClaudeMessagesReportsModelCooldown(t *testing.T) {
 		t.Fatalf("retry duration = %s, want positive duration under one minute", got)
 	}
 }
+
+func TestClaudeMessagesSkipsExhaustedFableWindow(t *testing.T) {
+	account := testAccount("account-uuid", 10)
+	account.fable = window{usedPercent: 100, minutes: 7 * 24 * 60, resetsAt: time.Now().Add(time.Hour), seenAt: time.Now()}
+	srv := newTestServer(t, []*Account{account})
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-fable-5-1","max_tokens":1,"messages":[{"role":"user","content":"hello"}]}`))
+	response := httptest.NewRecorder()
+	srv.claudeMessagesHTTP(response, request)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusTooManyRequests, response.Body.String())
+	}
+}
+
+func TestClaudeMessagesSkipsExhaustedFiveHourWindow(t *testing.T) {
+	account := testAccount("account-uuid", 10)
+	account.primary = window{usedPercent: 100, minutes: 5 * 60, resetsAt: time.Now().Add(time.Hour), seenAt: time.Now()}
+	srv := newTestServer(t, []*Account{account})
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hello"}]}`))
+	response := httptest.NewRecorder()
+	srv.claudeMessagesHTTP(response, request)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusTooManyRequests, response.Body.String())
+	}
+}

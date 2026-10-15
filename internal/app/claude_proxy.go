@@ -419,20 +419,26 @@ func (s *server) claudeModelRetryAfter(model string) time.Duration {
 	}
 	now := time.Now()
 	var retryAt time.Time
+	var eligible bool
 	for _, account := range s.pool.all() {
 		candidate := account.routingCandidate()
 		if !strings.EqualFold(candidate.provider, "claude") || candidate.id == "" || candidate.paused || candidate.reauth != "" || now.Before(candidate.cooldown) {
 			continue
 		}
+		eligible = true
+		accountRetryAt := candidate.quotaRetryAt(model, now)
 		cooldown := account.modelCooldownUntil(model)
-		if !cooldown.After(now) {
+		if cooldown.After(now) && (accountRetryAt.IsZero() || cooldown.Before(accountRetryAt)) {
+			accountRetryAt = cooldown
+		}
+		if accountRetryAt.IsZero() {
 			return 0
 		}
-		if retryAt.IsZero() || cooldown.Before(retryAt) {
-			retryAt = cooldown
+		if retryAt.IsZero() || accountRetryAt.Before(retryAt) {
+			retryAt = accountRetryAt
 		}
 	}
-	if retryAt.IsZero() {
+	if !eligible || retryAt.IsZero() {
 		return 0
 	}
 	return time.Until(retryAt)
@@ -453,7 +459,7 @@ func (s *server) selectClaudeAccountForModel(owners []string, skip map[string]bo
 			return false
 		}
 		candidate := a.routingCandidate()
-		if model != "" && now.Before(a.modelCooldownUntil(model)) {
+		if model != "" && (candidate.spent || now.Before(a.modelCooldownUntil(model)) || candidate.quotaExhausted(model, now)) {
 			return false
 		}
 		return !candidate.paused && candidate.reauth == "" && !now.Before(candidate.cooldown)

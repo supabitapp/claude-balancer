@@ -75,6 +75,8 @@ type dashboardAccountView struct {
 	PlanInfo        string
 	Status          accountStatus
 	StatusInfo      string
+	FiveHour        string
+	Fable           string
 	Weekly          string
 	Banked          string
 	BankedInfo      string
@@ -440,6 +442,14 @@ func (s *server) dashboardAt(now time.Time, private bool) dashboardView {
 		if account.WeeklyRemainingPercent != nil {
 			weekly = formatDecimal(*account.WeeklyRemainingPercent)
 		}
+		fiveHour := "--"
+		if account.FiveHourRemainingPercent != nil {
+			fiveHour = formatDecimal(*account.FiveHourRemainingPercent)
+		}
+		fable := "--"
+		if account.FableRemainingPercent != nil {
+			fable = formatDecimal(*account.FableRemainingPercent)
+		}
 		banked := "--"
 		if account.BankedResets != nil {
 			banked = dashboardNumber(*account.BankedResets)
@@ -457,6 +467,8 @@ func (s *server) dashboardAt(now time.Time, private bool) dashboardView {
 			PlanInfo:        dashboardPlanInfo(now, account.Subscription),
 			Status:          account.Status,
 			StatusInfo:      dashboardAccountStatusInfo(now, account),
+			FiveHour:        fiveHour,
+			Fable:           fable,
 			Weekly:          weekly,
 			Banked:          banked,
 			BankedInfo:      bankedInfo,

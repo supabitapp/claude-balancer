@@ -36,6 +36,7 @@ type routingCandidate struct {
 	cooldown        time.Time
 	primary         window
 	secondary       window
+	fable           window
 	resetCredits    resetCreditState
 	spendControl    *spendControlPayload
 	credits         *creditsPayload
@@ -316,6 +317,7 @@ func (a *Account) routingCandidate() routingCandidate {
 		cooldown:  a.cooldown,
 		primary:   a.primary,
 		secondary: a.secondary,
+		fable:     a.fable,
 		resetCredits: resetCreditState{
 			fetchedAt: a.resetCredits.fetchedAt,
 			known:     a.resetCredits.known,

@@ -45,6 +45,7 @@ type Account struct {
 	planType        string
 	primary         window
 	secondary       window
+	fable           window
 	spent           bool
 	resetCredits    resetCreditState
 	spendControl    *spendControlPayload
@@ -118,6 +119,10 @@ func (s accountState) effectiveRoutingMode() routingMode {
 }
 
 func (w window) known() bool { return !w.seenAt.IsZero() }
+
+func (w window) exhausted(now time.Time) bool {
+	return w.known() && w.usedPercent >= 100 && (w.resetsAt.IsZero() || w.resetsAt.After(now))
+}
 
 func remainingPercent(w window) (float64, bool) {
 	if !w.known() {

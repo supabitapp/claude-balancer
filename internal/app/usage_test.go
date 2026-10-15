@@ -16,7 +16,7 @@ func TestUsagePayloadWindowsUsesClaudeOAuthWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	primary, secondary := payload.windows(fetchedAt)
+	primary, secondary, fable := payload.windows(fetchedAt)
 	if !primary.known() || primary.usedPercent != 12.5 || primary.minutes != 5*60 {
 		t.Fatalf("primary = %+v, want 12.5%% over 5 hours", primary)
 	}
@@ -28,6 +28,9 @@ func TestUsagePayloadWindowsUsesClaudeOAuthWindows(t *testing.T) {
 	}
 	if !secondary.resetsAt.Equal(time.Date(2026, time.October, 22, 0, 0, 0, 0, time.UTC)) {
 		t.Fatalf("secondary reset = %s", secondary.resetsAt)
+	}
+	if fable.known() {
+		t.Fatalf("fable = %+v, want unknown", fable)
 	}
 }
 
@@ -43,12 +46,15 @@ func TestUsagePayloadWindowsFallsBackToLegacyRateLimitWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	primary, secondary := payload.windows(fetchedAt)
+	primary, secondary, fable := payload.windows(fetchedAt)
 	if !primary.known() || primary.usedPercent != 10 || primary.minutes != 5 {
 		t.Fatalf("primary = %+v, want legacy 10%% over 5 minutes", primary)
 	}
 	if !secondary.known() || secondary.usedPercent != 20 || secondary.minutes != 10080 {
 		t.Fatalf("secondary = %+v, want legacy 20%% over 7 days", secondary)
+	}
+	if fable.known() {
+		t.Fatalf("fable = %+v, want unknown", fable)
 	}
 }
 
@@ -59,17 +65,37 @@ func TestUsagePayloadWindowsFallsBackToClaudeLimits(t *testing.T) {
 		"limits":[
 			{"kind":"session","percent":3,"resets_at":"2026-10-15T22:00:00Z"},
 			{"kind":"weekly_all","percent":46,"resets_at":"2026-10-22T00:00:00Z"},
-			{"kind":"weekly_scoped","percent":88,"resets_at":"2026-10-22T00:00:00Z"}
+			{"kind":"weekly_scoped","percent":88,"resets_at":"2026-10-22T00:00:00Z","scope":{"model":{"display_name":"Fable"}}}
 		]
 	}`), &payload); err != nil {
 		t.Fatal(err)
 	}
 
-	primary, secondary := payload.windows(fetchedAt)
+	primary, secondary, fable := payload.windows(fetchedAt)
 	if primary.usedPercent != 3 || primary.minutes != 5*60 || !primary.resetsAt.Equal(time.Date(2026, time.October, 15, 22, 0, 0, 0, time.UTC)) {
 		t.Fatalf("primary = %+v, want session limit", primary)
 	}
 	if secondary.usedPercent != 46 || secondary.minutes != 7*24*60 || !secondary.resetsAt.Equal(time.Date(2026, time.October, 22, 0, 0, 0, 0, time.UTC)) {
 		t.Fatalf("secondary = %+v, want weekly_all limit", secondary)
+	}
+	if !fable.known() || fable.usedPercent != 88 || fable.minutes != 7*24*60 {
+		t.Fatalf("fable = %+v, want weekly scoped Fable limit", fable)
+	}
+}
+
+func TestUsagePayloadWindowsUsesDedicatedFableWindow(t *testing.T) {
+	fetchedAt := time.Date(2026, time.October, 15, 17, 30, 0, 0, time.UTC)
+	var payload usagePayload
+	if err := json.Unmarshal([]byte(`{
+		"five_hour":{"utilization":12,"resets_at":"2026-10-15T22:00:00Z"},
+		"seven_day":{"utilization":37,"resets_at":"2026-10-22T00:00:00Z"},
+		"seven_day_fable":{"utilization":61,"resets_at":"2026-10-22T00:00:00Z"}
+	}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, fable := payload.windows(fetchedAt)
+	if !fable.known() || fable.usedPercent != 61 || fable.minutes != 7*24*60 {
+		t.Fatalf("fable = %+v, want dedicated Fable window", fable)
 	}
 }

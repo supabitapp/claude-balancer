@@ -20,11 +20,12 @@ const (
 )
 
 type usagePayload struct {
-	PlanType  string             `json:"plan_type"`
-	FiveHour  claudeUsageWindow  `json:"five_hour"`
-	SevenDay  claudeUsageWindow  `json:"seven_day"`
-	Limits    []claudeUsageLimit `json:"limits"`
-	RateLimit struct {
+	PlanType      string             `json:"plan_type"`
+	FiveHour      claudeUsageWindow  `json:"five_hour"`
+	SevenDay      claudeUsageWindow  `json:"seven_day"`
+	SevenDayFable claudeUsageWindow  `json:"seven_day_fable"`
+	Limits        []claudeUsageLimit `json:"limits"`
+	RateLimit     struct {
 		LimitReached    *bool       `json:"limit_reached"`
 		PrimaryWindow   usageWindow `json:"primary_window"`
 		SecondaryWindow usageWindow `json:"secondary_window"`
@@ -45,6 +46,11 @@ type claudeUsageLimit struct {
 	Kind     string     `json:"kind"`
 	Percent  *float64   `json:"percent"`
 	ResetsAt *time.Time `json:"resets_at"`
+	Scope    *struct {
+		Model *struct {
+			DisplayName string `json:"display_name"`
+		} `json:"model"`
+	} `json:"scope"`
 }
 
 func (u claudeUsageWindow) window(fetchedAt time.Time, minutes int) window {
@@ -138,9 +144,10 @@ func (p usagePayload) bankedResets() *int64 {
 	return &p.RateLimitResetCredits.AvailableCount
 }
 
-func (p usagePayload) windows(fetchedAt time.Time) (primary, secondary window) {
+func (p usagePayload) windows(fetchedAt time.Time) (primary, secondary, fable window) {
 	primary = p.RateLimit.PrimaryWindow.window(fetchedAt)
 	secondary = p.RateLimit.SecondaryWindow.window(fetchedAt)
+	fable = p.SevenDayFable.window(fetchedAt, 7*24*60)
 	if direct := p.FiveHour.window(fetchedAt, 5*60); direct.known() {
 		primary = direct
 	}
@@ -152,7 +159,7 @@ func (p usagePayload) windows(fetchedAt time.Time) (primary, secondary window) {
 		switch limit.Kind {
 		case "session":
 			minutes = 5 * 60
-		case "weekly_all":
+		case "weekly_all", "weekly_scoped":
 			minutes = 7 * 24 * 60
 		default:
 			continue
@@ -167,8 +174,15 @@ func (p usagePayload) windows(fetchedAt time.Time) (primary, secondary window) {
 		if limit.Kind == "weekly_all" && !secondary.known() {
 			secondary = fallback
 		}
+		if limit.Kind == "weekly_scoped" && isFableLimit(limit) && !fable.known() {
+			fable = fallback
+		}
 	}
-	return primary, secondary
+	return primary, secondary, fable
+}
+
+func isFableLimit(limit claudeUsageLimit) bool {
+	return limit.Scope != nil && limit.Scope.Model != nil && strings.EqualFold(strings.TrimSpace(limit.Scope.Model.DisplayName), "fable")
 }
 
 type usageWindow struct {
@@ -236,12 +250,13 @@ func (s *server) pollUsage(ctx context.Context, account *Account) error {
 		return err
 	}
 	fetchedAt := time.Now()
-	primary, secondary := payload.windows(fetchedAt)
+	primary, secondary, fable := payload.windows(fetchedAt)
 	account.adopt(
 		fetchedAt,
 		payload.PlanType,
 		primary,
 		secondary,
+		fable,
 		payload.bankedResets(),
 		payload.SpendControl,
 		payload.Credits,
@@ -461,7 +476,7 @@ func (s *server) reauthorize(account *Account) error {
 	return nil
 }
 
-func (a *Account) adopt(fetchedAt time.Time, planType string, primary, secondary window, banked *int64, spendControl *spendControlPayload, credits *creditsPayload) {
+func (a *Account) adopt(fetchedAt time.Time, planType string, primary, secondary, fable window, banked *int64, spendControl *spendControlPayload, credits *creditsPayload) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.usageFetchedAt = fetchedAt
@@ -477,10 +492,15 @@ func (a *Account) adopt(fetchedAt time.Time, planType string, primary, secondary
 	if secondary.known() {
 		a.secondary = secondary
 	}
+	if fable.known() {
+		a.fable = fable
+	}
 	if banked != nil && (!a.resetCredits.known || a.resetCredits.count != *banked) {
 		a.resetCredits = resetCreditState{known: true, count: *banked}
 	}
-	if (a.primary.known() || a.secondary.known()) && a.pressure() < 100 && !spendLimitReached(a.spendControl) {
+	if a.primary.exhausted(fetchedAt) || a.secondary.exhausted(fetchedAt) || spendLimitReached(a.spendControl) {
+		a.spent = true
+	} else if (a.primary.known() || a.secondary.known()) && a.pressure() < 100 {
 		a.spent = false
 	}
 }
