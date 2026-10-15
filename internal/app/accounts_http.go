@@ -138,6 +138,11 @@ func (s *server) accountsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) completeClaudeAccountLogin(ctx context.Context, flow *claudeOAuthFlow) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, deviceAuthTimeout)
+	defer cancel()
 	credentials, err := flow.wait(ctx)
 	flow.stop()
 	if credentials == nil && err == nil {
