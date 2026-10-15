@@ -322,6 +322,10 @@ func (s *server) pollResetCredits(ctx context.Context, account *Account) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		account.markResetCreditsUnavailable(time.Now())
+		return nil
+	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("reset credits returned %s", resp.Status)
 	}
@@ -490,6 +494,12 @@ func (a *Account) adoptResetCredits(fetchedAt time.Time, count int64, credits []
 		count:     count,
 		details:   append([]resetCredit(nil), credits...),
 	}
+}
+
+func (a *Account) markResetCreditsUnavailable(fetchedAt time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.resetCredits = resetCreditState{fetchedAt: fetchedAt}
 }
 
 func (a *Account) pollsDue(now time.Time, every time.Duration) (usage, resetCredits bool) {
