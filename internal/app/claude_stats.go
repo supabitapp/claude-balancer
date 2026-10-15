@@ -21,10 +21,11 @@ type claudeUsageEvent struct {
 }
 
 func (u claudeUsagePayload) responseUsage() responseUsage {
+	input := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 	usage := responseUsage{
-		InputTokens:  u.InputTokens,
+		InputTokens:  input,
 		OutputTokens: u.OutputTokens,
-		TotalTokens:  u.InputTokens + u.OutputTokens,
+		TotalTokens:  input + u.OutputTokens,
 	}
 	usage.InputDetails.CachedTokens = u.CacheReadInputTokens
 	usage.InputDetails.CacheWriteTokens = u.CacheCreationInputTokens

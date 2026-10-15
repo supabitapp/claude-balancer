@@ -159,8 +159,8 @@ func TestClaudeMessagesRecordStats(t *testing.T) {
 	if traffic.Turns != 1 || activityTotal(traffic.Activity) != 1 {
 		t.Fatalf("account traffic = turns %d activity %d, want 1 and 1", traffic.Turns, activityTotal(traffic.Activity))
 	}
-	if snapshot.MonthlyUsage.InputTokens != 11 || snapshot.MonthlyUsage.OutputTokens != 4 || snapshot.MonthlyUsage.InputDetails.CachedTokens != 3 || snapshot.MonthlyUsage.InputDetails.CacheWriteTokens != 2 {
-		t.Fatalf("monthly usage = %+v, want input 11 cached 3 cache-write 2 output 4", snapshot.MonthlyUsage)
+	if snapshot.MonthlyUsage.InputTokens != 16 || snapshot.MonthlyUsage.OutputTokens != 4 || snapshot.MonthlyUsage.InputDetails.CachedTokens != 3 || snapshot.MonthlyUsage.InputDetails.CacheWriteTokens != 2 {
+		t.Fatalf("monthly usage = %+v, want input 16 cached 3 cache-write 2 output 4", snapshot.MonthlyUsage)
 	}
 }
 
@@ -214,12 +214,12 @@ func TestClaudeMessagesShowLiveThreadWhileStreaming(t *testing.T) {
 	if len(snapshot.Threads) != 0 {
 		t.Fatalf("live threads = %d, want 0 after the stream ends", len(snapshot.Threads))
 	}
-	if snapshot.MonthlyUsage.InputTokens != 11 || snapshot.MonthlyUsage.InputDetails.CachedTokens != 3 || snapshot.MonthlyUsage.OutputTokens != 4 {
-		t.Fatalf("monthly usage = %+v, want input 11 cached 3 output 4", snapshot.MonthlyUsage)
+	if snapshot.MonthlyUsage.InputTokens != 14 || snapshot.MonthlyUsage.InputDetails.CachedTokens != 3 || snapshot.MonthlyUsage.OutputTokens != 4 {
+		t.Fatalf("monthly usage = %+v, want input 14 cached 3 output 4", snapshot.MonthlyUsage)
 	}
 	usage, err := srv.pool.store.apiKeyUsage()
-	if err != nil || usage["laptop"].TotalTokens != 15 {
-		t.Fatalf("API key usage = %+v, error = %v, want 15 tokens for laptop", usage, err)
+	if err != nil || usage["laptop"].TotalTokens != 18 {
+		t.Fatalf("API key usage = %+v, error = %v, want 18 tokens for laptop", usage, err)
 	}
 }
 
@@ -227,8 +227,8 @@ func TestClaudeResponseUsageParsesStream(t *testing.T) {
 	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11,\"cache_read_input_tokens\":3}}}\n\n" +
 		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4}}\n\n"
 	usage := claudeResponseUsage([]byte(body))
-	if usage.InputTokens != 11 || usage.OutputTokens != 4 || usage.InputDetails.CachedTokens != 3 || usage.TotalTokens != 15 {
-		t.Fatalf("stream usage = %+v, want input 11 cached 3 output 4 total 15", usage)
+	if usage.InputTokens != 14 || usage.OutputTokens != 4 || usage.InputDetails.CachedTokens != 3 || usage.TotalTokens != 18 {
+		t.Fatalf("stream usage = %+v, want input 14 cached 3 output 4 total 18", usage)
 	}
 }
 
