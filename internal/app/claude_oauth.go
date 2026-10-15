@@ -482,10 +482,11 @@ func exchangeAccountRefreshToken(ctx context.Context, hc *http.Client, state acc
 	if !isClaudeIdentityToken(state.IDToken) {
 		return exchangeRefreshToken(ctx, hc, state.RefreshToken)
 	}
-	credentials, err := refreshClaudeToken(ctx, hc, state.RefreshToken)
+	refreshed, err := refreshClaudeToken(ctx, hc, state.RefreshToken)
 	if err != nil {
 		return tokenResponse{}, claudeRefreshPermanent(err), err
 	}
+	credentials := *refreshed
 	previous := claudeCredentialsFromIdentityToken(state.IDToken)
 	if credentials.AccountID == "" {
 		credentials.AccountID = previous.AccountID
@@ -503,7 +504,7 @@ func exchangeAccountRefreshToken(ctx context.Context, hc *http.Client, state acc
 		credentials.DeviceID = previous.DeviceID
 	}
 	return tokenResponse{
-		IDToken:      claudeIdentityToken(*credentials),
+		IDToken:      claudeIdentityToken(credentials),
 		AccessToken:  credentials.AccessToken,
 		RefreshToken: credentials.RefreshToken,
 	}, false, nil
