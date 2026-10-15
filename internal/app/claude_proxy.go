@@ -218,6 +218,11 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 	for attempt := 0; attempt <= claudeMaxFailoverAttempt; attempt++ {
 		account := s.selectClaudeAccountForModel(owners, skip, parsed.Model)
 		if account == nil {
+			if retryAfter := s.claudeModelRetryAfter(parsed.Model); retryAfter > 0 {
+				w.Header().Set("Retry-After", strconv.FormatInt(int64((retryAfter+time.Second-1)/time.Second), 10))
+				writeError(w, http.StatusTooManyRequests, "Claude model is temporarily unavailable")
+				return
+			}
 			writeError(w, http.StatusServiceUnavailable, "no Claude account available")
 			return
 		}
@@ -400,6 +405,31 @@ func (s *server) claudeRouteOwners(route claudeRoute, model string) ([]string, e
 
 func (s *server) selectClaudeAccount(owners []string, skip map[string]bool) *Account {
 	return s.selectClaudeAccountForModel(owners, skip, "")
+}
+
+func (s *server) claudeModelRetryAfter(model string) time.Duration {
+	if s == nil || s.pool == nil {
+		return 0
+	}
+	now := time.Now()
+	var retryAt time.Time
+	for _, account := range s.pool.all() {
+		candidate := account.routingCandidate()
+		if !strings.EqualFold(candidate.provider, "claude") || candidate.id == "" || candidate.paused || candidate.reauth != "" || now.Before(candidate.cooldown) {
+			continue
+		}
+		cooldown := account.modelCooldownUntil(model)
+		if !cooldown.After(now) {
+			return 0
+		}
+		if retryAt.IsZero() || cooldown.Before(retryAt) {
+			retryAt = cooldown
+		}
+	}
+	if retryAt.IsZero() {
+		return 0
+	}
+	return time.Until(retryAt)
 }
 
 func (s *server) selectClaudeAccountForModel(owners []string, skip map[string]bool, model string) *Account {

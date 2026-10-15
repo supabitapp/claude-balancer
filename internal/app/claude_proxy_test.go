@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestClaudeBodyForAccountEncodesUserIDAsString(t *testing.T) {
@@ -114,5 +116,24 @@ func TestClaudeCountTokensForwardsBodyWithoutMetadata(t *testing.T) {
 	}
 	if string(forwarded) != string(body) {
 		t.Fatalf("forwarded body = %s, want %s", forwarded, body)
+	}
+}
+
+func TestClaudeMessagesReportsModelCooldown(t *testing.T) {
+	account := testAccount("account-uuid", 10)
+	account.coolModel("claude-sonnet", nil)
+	srv := newTestServer(t, []*Account{account})
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet","max_tokens":1,"messages":[{"role":"user","content":"hello"}]}`))
+	response := httptest.NewRecorder()
+	srv.claudeMessagesHTTP(response, request)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusTooManyRequests, response.Body.String())
+	}
+	if response.Header().Get("Retry-After") == "" {
+		t.Fatal("Retry-After header is empty")
+	}
+	if got := srv.claudeModelRetryAfter("claude-sonnet"); got <= 0 || got > time.Minute {
+		t.Fatalf("retry duration = %s, want positive duration under one minute", got)
 	}
 }
