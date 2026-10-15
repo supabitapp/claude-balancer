@@ -82,16 +82,14 @@ type claudeOAuthCallback struct {
 }
 
 type claudeOAuthFlow struct {
-	ctx          context.Context
-	hc           *http.Client
-	state        string
-	pkce         claudePKCE
-	callback     chan claudeOAuthCallback
-	once         sync.Once
-	listener     net.Listener
-	server       *http.Server
-	redirect     string
-	callbackPort int
+	state    string
+	pkce     claudePKCE
+	callback chan claudeOAuthCallback
+	once     sync.Once
+	listener net.Listener
+	server   *http.Server
+	redirect string
+	hc       *http.Client
 }
 
 func newClaudePKCE() (claudePKCE, error) {
@@ -134,9 +132,18 @@ func claudeOAuthHeaders(req *http.Request) {
 }
 
 func claudeLogin(ctx context.Context, hc *http.Client, port int, open bool) (*claudeCredentials, error) {
-	if ctx == nil {
-		ctx = context.Background()
+	flow, link, err := startClaudeLogin(hc, port)
+	if err != nil {
+		return nil, err
 	}
+	defer flow.stop()
+	if open {
+		openBrowser(link)
+	}
+	return flow.wait(ctx)
+}
+
+func startClaudeLogin(hc *http.Client, port int) (*claudeOAuthFlow, string, error) {
 	if hc == nil {
 		hc = http.DefaultClient
 	}
@@ -145,45 +152,51 @@ func claudeLogin(ctx context.Context, hc *http.Client, port int, open bool) (*cl
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
 	if err != nil {
-		return nil, fmt.Errorf("Claude OAuth callback address is unavailable: %w", err)
+		return nil, "", fmt.Errorf("Claude OAuth callback address is unavailable: %w", err)
 	}
 	pkce, err := newClaudePKCE()
 	if err != nil {
 		listener.Close()
-		return nil, err
+		return nil, "", err
 	}
 	state, err := randomClaudeOAuthToken(32)
 	if err != nil {
 		listener.Close()
-		return nil, fmt.Errorf("generate Claude OAuth state: %w", err)
+		return nil, "", fmt.Errorf("generate Claude OAuth state: %w", err)
 	}
 	flow := &claudeOAuthFlow{
-		ctx: ctx, hc: hc, state: state, pkce: pkce,
+		state: state, pkce: pkce,
 		callback: make(chan claudeOAuthCallback, 1), listener: listener,
-		redirect: claudeOAuthRedirect(port), callbackPort: port,
+		redirect: claudeOAuthRedirect(port), hc: hc,
 	}
 	flow.server = &http.Server{Handler: flow.handler()}
 	go func() { _ = flow.server.Serve(listener) }()
-	defer func() {
-		_ = flow.server.Shutdown(context.Background())
-	}()
+	return flow, claudeAuthorizationURL(state, pkce, flow.redirect), nil
+}
 
-	link := claudeAuthorizationURL(state, pkce, flow.redirect)
-	if open {
-		openBrowser(link)
+func (f *claudeOAuthFlow) wait(ctx context.Context) (*claudeCredentials, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	select {
-	case result := <-flow.callback:
+	case result := <-f.callback:
 		if result.err != "" {
 			return nil, fmt.Errorf("Claude sign-in refused: %s", result.err)
 		}
-		if result.state != state {
+		if result.state != f.state {
 			return nil, errors.New("Claude OAuth state mismatch")
 		}
-		return exchangeClaudeCode(ctx, hc, result.code, state, pkce, flow.redirect)
+		return exchangeClaudeCode(ctx, f.hc, result.code, f.state, f.pkce, f.redirect)
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func (f *claudeOAuthFlow) stop() {
+	if f == nil || f.server == nil {
+		return
+	}
+	_ = f.server.Shutdown(context.Background())
 }
 
 func (f *claudeOAuthFlow) handler() http.Handler {
