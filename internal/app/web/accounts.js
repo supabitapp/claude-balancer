@@ -1,9 +1,11 @@
 const code = document.querySelector("[data-copy-code]")
 
-code.addEventListener("click", async () => {
-  await navigator.clipboard.writeText(code.dataset.copyCode)
-  code.querySelector("small").textContent = "Copied"
-})
+if (code) {
+  code.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(code.dataset.copyCode)
+    code.querySelector("small").textContent = "Copied"
+  })
+}
 
 const wait = () => new Promise(resolve => setTimeout(resolve, 1000))
 
