@@ -62,7 +62,7 @@ func (a *Account) refreshOwned(wait context.Context, owner refreshOwner) error {
 				return err
 			}
 			if a.Reauth != "" {
-				err := fmt.Errorf("account %s needs reauth: %s", claimsFromToken(a.IDToken).Auth.AccountID, a.Reauth)
+				err := fmt.Errorf("account %s needs reauth: %s", accountIDFromToken(a.IDToken), a.Reauth)
 				a.mu.Unlock()
 				return err
 			}
@@ -76,7 +76,7 @@ func (a *Account) refreshOwned(wait context.Context, owner refreshOwner) error {
 				}
 			}
 			ctx, cancel := context.WithTimeout(owner.lifetime, refreshTimeout)
-			ctx, observed := observeRefresh(ctx, wait, owner.tracer, owner.log, claimsFromToken(a.IDToken).Auth.AccountID)
+			ctx, observed := observeRefresh(ctx, wait, owner.tracer, owner.log, accountIDFromToken(a.IDToken))
 			operation = &accountRefresh{done: make(chan struct{}), cancel: cancel, observed: observed}
 			a.inflight = operation
 			state := a.accountState
@@ -87,7 +87,7 @@ func (a *Account) refreshOwned(wait context.Context, owner refreshOwner) error {
 				}
 				defer observed.span.End() // before registration is released/exporter shutdown
 				observed.outcome(ctx, "exchange_started", nil)
-				tokens, permanent, err := exchangeRefreshToken(ctx, owner.client, state.RefreshToken)
+				tokens, permanent, err := exchangeAccountRefreshToken(ctx, owner.client, state)
 				observed.outcome(ctx, "exchange_finished", err)
 				cancel()
 				// Decoded results must survive waiter/runtime cancellation. Only

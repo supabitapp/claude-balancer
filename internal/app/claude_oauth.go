@@ -391,6 +391,78 @@ func accountFromClaudeCredentials(credentials *claudeCredentials) *Account {
 	})
 }
 
+func exchangeAccountRefreshToken(ctx context.Context, hc *http.Client, state accountState) (tokenResponse, bool, error) {
+	if !isClaudeIdentityToken(state.IDToken) {
+		return exchangeRefreshToken(ctx, hc, state.RefreshToken)
+	}
+	credentials, err := refreshClaudeToken(ctx, hc, state.RefreshToken)
+	if err != nil {
+		return tokenResponse{}, claudeRefreshPermanent(err), err
+	}
+	previous := claudeCredentialsFromIdentityToken(state.IDToken)
+	if credentials.AccountID == "" {
+		credentials.AccountID = previous.AccountID
+	}
+	if credentials.Email == "" {
+		credentials.Email = previous.Email
+	}
+	if credentials.OrganizationID == "" {
+		credentials.OrganizationID = previous.OrganizationID
+	}
+	if credentials.OrganizationName == "" {
+		credentials.OrganizationName = previous.OrganizationName
+	}
+	if credentials.DeviceID == "" {
+		credentials.DeviceID = previous.DeviceID
+	}
+	return tokenResponse{
+		IDToken:      claudeIdentityToken(*credentials),
+		AccessToken:  credentials.AccessToken,
+		RefreshToken: credentials.RefreshToken,
+	}, false, nil
+}
+
+func isClaudeIdentityToken(token string) bool {
+	var identity struct {
+		Provider string `json:"provider"`
+	}
+	if json.Unmarshal([]byte(token), &identity) != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(identity.Provider), "claude")
+}
+
+func claudeCredentialsFromIdentityToken(token string) claudeCredentials {
+	var identity struct {
+		AccountID        string `json:"account_id"`
+		Email            string `json:"email"`
+		OrganizationID   string `json:"organization_id"`
+		OrganizationName string `json:"organization_name"`
+		DeviceID         string `json:"device_id"`
+	}
+	_ = json.Unmarshal([]byte(token), &identity)
+	return claudeCredentials{
+		AccountID:        identity.AccountID,
+		Email:            identity.Email,
+		OrganizationID:   identity.OrganizationID,
+		OrganizationName: identity.OrganizationName,
+		DeviceID:         identity.DeviceID,
+	}
+}
+
+func claudeRefreshPermanent(err error) bool {
+	if err == nil {
+		return false
+	}
+	reason := strings.ToLower(err.Error())
+	for _, marker := range []string{"invalid_grant", "invalid_token", "refresh_token_expired", "refresh_token_reused", "refresh_token_invalidated"} {
+		if strings.Contains(reason, marker) {
+			return true
+		}
+	}
+	return strings.Contains(reason, "token endpoint returned 401")
+}
+
 func randomClaudeDeviceID() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {

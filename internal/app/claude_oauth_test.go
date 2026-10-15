@@ -102,7 +102,9 @@ func TestRefreshClaudeTokenKeepsRotatingTokenFallback(t *testing.T) {
 	var requestBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		requestBody = string(body)
+		if r.URL.Path == "/token" {
+			requestBody = string(body)
+		}
 		io.WriteString(w, `{"access_token":"new-access","expires_in":1800}`)
 	}))
 	t.Cleanup(server.Close)
@@ -120,5 +122,61 @@ func TestRefreshClaudeTokenKeepsRotatingTokenFallback(t *testing.T) {
 	}
 	if !strings.Contains(requestBody, `"grant_type":"refresh_token"`) || !strings.Contains(requestBody, `"refresh_token":"old-refresh"`) {
 		t.Fatalf("refresh body = %s", requestBody)
+	}
+}
+
+func TestExchangeAccountRefreshTokenUsesClaudeIssuerAndPreservesIdentity(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+				t.Fatal(err)
+			}
+			io.WriteString(w, `{"access_token":"new-access","expires_in":3600}`)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(server.Close)
+	oldToken, oldProfile := claudeOAuthTokenURL, claudeOAuthProfileURL
+	claudeOAuthTokenURL = server.URL + "/token"
+	claudeOAuthProfileURL = server.URL + "/profile"
+	t.Cleanup(func() { claudeOAuthTokenURL, claudeOAuthProfileURL = oldToken, oldProfile })
+
+	state := accountState{
+		IDToken:      claudeIdentityToken(claudeCredentials{AccountID: "account", Email: "user@example.com", OrganizationID: "org", OrganizationName: "Org", DeviceID: strings.Repeat("a", 64)}),
+		RefreshToken: "old-refresh",
+	}
+	tokens, permanent, err := exchangeAccountRefreshToken(context.Background(), server.Client(), state)
+	if err != nil || permanent {
+		t.Fatalf("refresh = %v (permanent=%v)", err, permanent)
+	}
+	if tokens.AccessToken != "new-access" || tokens.RefreshToken != "old-refresh" {
+		t.Fatalf("tokens = %+v", tokens)
+	}
+	identity := claudeCredentialsFromIdentityToken(tokens.IDToken)
+	if identity.AccountID != "account" || identity.Email != "user@example.com" || identity.OrganizationID != "org" || identity.DeviceID != strings.Repeat("a", 64) {
+		t.Fatalf("identity = %+v", identity)
+	}
+	if requestBody["client_id"] != claudeOAuthClientID || requestBody["grant_type"] != "refresh_token" || requestBody["refresh_token"] != "old-refresh" || requestBody["scope"] != claudeOAuthScope {
+		t.Fatalf("request body = %#v", requestBody)
+	}
+}
+
+func TestExchangeAccountRefreshTokenMarksClaudeInvalidGrantPermanent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":"invalid_grant"}`)
+	}))
+	t.Cleanup(server.Close)
+	oldToken, oldProfile := claudeOAuthTokenURL, claudeOAuthProfileURL
+	claudeOAuthTokenURL = server.URL
+	claudeOAuthProfileURL = server.URL
+	t.Cleanup(func() { claudeOAuthTokenURL, claudeOAuthProfileURL = oldToken, oldProfile })
+
+	state := accountState{IDToken: claudeIdentityToken(claudeCredentials{AccountID: "account"}), RefreshToken: "old-refresh"}
+	_, permanent, err := exchangeAccountRefreshToken(context.Background(), server.Client(), state)
+	if err == nil || !permanent || !strings.Contains(err.Error(), "invalid_grant") {
+		t.Fatalf("refresh = %v (permanent=%v), want permanent invalid_grant", err, permanent)
 	}
 }
