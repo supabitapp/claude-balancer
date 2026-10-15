@@ -5,7 +5,7 @@ Wants=network-online.target
 Requires=claude-balancer.socket
 
 [Service]
-ExecStart=/usr/local/bin/claude-balancer server -addr 0.0.0.0:8000 -no-tui -json
+ExecStart=/usr/local/bin/claude-balancer server -addr 0.0.0.0:8000 -no-auth -no-tui -json
 Restart=always
 RestartSec=2
 UMask=0077
