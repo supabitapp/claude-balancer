@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -160,6 +161,65 @@ func TestClaudeMessagesRecordStats(t *testing.T) {
 	}
 	if snapshot.MonthlyUsage.InputTokens != 11 || snapshot.MonthlyUsage.OutputTokens != 4 || snapshot.MonthlyUsage.InputDetails.CachedTokens != 3 || snapshot.MonthlyUsage.InputDetails.CacheWriteTokens != 2 {
 		t.Fatalf("monthly usage = %+v, want input 11 cached 3 cache-write 2 output 4", snapshot.MonthlyUsage)
+	}
+}
+
+func TestClaudeMessagesShowLiveThreadWhileStreaming(t *testing.T) {
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11,\"cache_read_input_tokens\":3,\"output_tokens\":1}}}\n\n")
+		w.(http.Flusher).Flush()
+		<-release
+		io.WriteString(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":11,\"cache_read_input_tokens\":3,\"output_tokens\":4}}\n\n")
+	}))
+	t.Cleanup(upstream.Close)
+	var releaseOnce sync.Once
+	releaseStream := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseStream)
+
+	account := testAccount("account-a", 10)
+	srv := newTestServer(t, []*Account{account})
+	srv.upstream = upstream.URL
+	if err := srv.pool.store.addAPIKey(storedAPIKey{Name: "laptop", Secret: "laptop-secret", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	srv.lookupAPIKey = srv.pool.store.apiKeyName
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet","stream":true,"messages":[]}`))
+	request.Header.Set("Authorization", "Bearer laptop-secret")
+	request.Header.Set("X-Claude-Code-Session-Id", "session-a")
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.claudeMessagesHTTP(response, request)
+	}()
+
+	var threads []ThreadSnapshot
+	for deadline := time.Now().Add(5 * time.Second); len(threads) == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		threads = srv.stats.snapshot().Threads
+	}
+	if len(threads) != 1 {
+		t.Fatalf("live threads = %d, want 1 while streaming", len(threads))
+	}
+	thread := threads[0]
+	if thread.Key != "claude:claude-sonnet:session-a" || thread.Account != account.id() || thread.apiKeyName != "laptop" || thread.Via != transportHTTP || thread.Turns != 1 {
+		t.Fatalf("live thread = %+v, want session route on account-a from laptop", thread)
+	}
+
+	releaseStream()
+	<-done
+	snapshot := srv.stats.snapshot()
+	if len(snapshot.Threads) != 0 {
+		t.Fatalf("live threads = %d, want 0 after the stream ends", len(snapshot.Threads))
+	}
+	if snapshot.MonthlyUsage.InputTokens != 11 || snapshot.MonthlyUsage.InputDetails.CachedTokens != 3 || snapshot.MonthlyUsage.OutputTokens != 4 {
+		t.Fatalf("monthly usage = %+v, want input 11 cached 3 output 4", snapshot.MonthlyUsage)
+	}
+	usage, err := srv.pool.store.apiKeyUsage()
+	if err != nil || usage["laptop"].TotalTokens != 15 {
+		t.Fatalf("API key usage = %+v, error = %v, want 15 tokens for laptop", usage, err)
 	}
 }
 

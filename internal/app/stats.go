@@ -343,10 +343,6 @@ func (s *Stats) applyCompleted(at time.Time, thread, account, requestKind string
 	}
 }
 
-func (s *Stats) recordUsage(thread, account, model, effort, serviceTier string, usage responseUsage) {
-	s.recordAPIKeyUsage("", thread, account, model, effort, serviceTier, usage)
-}
-
 func (s *Stats) recordAPIKeyUsage(apiKeyName, thread, account, model, effort, serviceTier string, usage responseUsage) {
 	if usage.empty() {
 		return

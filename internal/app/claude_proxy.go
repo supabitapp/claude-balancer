@@ -274,7 +274,8 @@ func claudeBodyForAccount(body []byte, account *Account, route claudeRoute) []by
 // accounts. It retries only before any upstream response bytes are sent and
 // only for statuses that are safe to replay (rate limits and transient 5xx).
 func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorizeAPIKey(r); !ok {
+	apiKey, ok := s.authorizeAPIKey(r)
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "missing or invalid bearer key")
 		return
 	}
@@ -319,6 +320,13 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		stop := context.AfterFunc(s.ctx, cancel)
 		defer stop()
 	}
+	counted := s.stats != nil && !strings.HasSuffix(r.URL.Path, "/count_tokens")
+	statsThread := route.statsThread(parsed.Model)
+	metadata := route.turnMetadata()
+	if counted {
+		s.stats.activateThread(statsThread)
+		defer s.stats.deactivateThread(statsThread)
+	}
 	skip := map[string]bool{}
 	refreshed := map[string]bool{}
 	for attempt := 0; attempt <= claudeMaxFailoverAttempt; attempt++ {
@@ -333,6 +341,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.reserveClaudeRoute(route, parsed.Model, account, owners)
+		sent := time.Now()
 		response, requestErr := s.doClaudeMessages(ctx, r, body, account)
 		if requestErr != nil {
 			skip[claudeAccountID(account)] = true
@@ -417,13 +426,17 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		copyClaudeResponseHeaders(w.Header(), response.Header)
 		w.WriteHeader(response.StatusCode)
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
-			if s.stats != nil && !strings.HasSuffix(r.URL.Path, "/count_tokens") {
+			if counted {
+				accountID := claudeAccountID(account)
+				s.stats.recordAccepted(time.Now(), statsThread, requestIP(r), apiKey, accountID, parsed.Model, "", "", transportHTTP, metadata, true)
+				s.stats.answered(statsThread, accountID, time.Since(sent))
 				var responseBody bytes.Buffer
 				_, copyErr := io.Copy(io.MultiWriter(w, &responseBody), io.LimitReader(response.Body, claudeMaxResponseBody))
-				if copyErr == nil && responseBody.Len() <= claudeMaxResponseBody {
+				if copyErr == nil {
 					account.successfulClaudeModel(parsed.Model)
 					s.recordClaudeRoute(route, parsed.Model, account, owners)
-					s.stats.recordClaudeResponse(time.Now(), claudeAccountID(account), parsed.Model, claudeResponseUsage(responseBody.Bytes()))
+					s.stats.recordAPIKeyUsage(apiKey.name, statsThread, accountID, parsed.Model, "", "", claudeResponseUsage(responseBody.Bytes()))
+					s.stats.completed(statsThread, accountID, metadata, time.Since(sent))
 				}
 				return
 			}

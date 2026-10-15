@@ -1,9 +1,9 @@
 package app
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"strings"
-	"time"
 )
 
 type claudeUsagePayload struct {
@@ -31,15 +31,26 @@ func (u claudeUsagePayload) responseUsage() responseUsage {
 	return usage
 }
 
+func (u *claudeUsagePayload) merge(other claudeUsagePayload) {
+	u.InputTokens = max(u.InputTokens, other.InputTokens)
+	u.OutputTokens = max(u.OutputTokens, other.OutputTokens)
+	u.CacheCreationInputTokens = max(u.CacheCreationInputTokens, other.CacheCreationInputTokens)
+	u.CacheReadInputTokens = max(u.CacheReadInputTokens, other.CacheReadInputTokens)
+}
+
+func (e claudeUsageEvent) usage() claudeUsagePayload {
+	usage := e.Usage
+	usage.merge(e.Message.Usage)
+	return usage
+}
+
 func claudeResponseUsage(body []byte) responseUsage {
 	var event claudeUsageEvent
 	if json.Unmarshal(body, &event) == nil {
-		usage := event.Usage.responseUsage()
-		usage.add(event.Message.Usage.responseUsage())
-		return usage
+		return event.usage().responseUsage()
 	}
 
-	var total responseUsage
+	var total claudeUsagePayload
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data:") {
@@ -53,19 +64,22 @@ func claudeResponseUsage(body []byte) responseUsage {
 		if json.Unmarshal([]byte(data), &event) != nil {
 			continue
 		}
-		usage := event.Usage.responseUsage()
-		usage.add(event.Message.Usage.responseUsage())
-		total.add(usage)
+		total.merge(event.usage())
 	}
-	return total
+	return total.responseUsage()
 }
 
-func (s *Stats) recordClaudeResponse(at time.Time, account, model string, usage responseUsage) {
-	if s == nil || account == "" {
-		return
+func (r claudeRoute) statsThread(model string) string {
+	if keys := r.writeKeys(model); len(keys) > 0 {
+		return keys[0]
 	}
-	s.recordAccepted(at, "", "", apiKeyIdentity{}, account, model, "", "", transportHTTP, turnMetadata{}, true)
-	if !usage.empty() {
-		s.recordUsage("", account, model, "", "", usage)
+	return "claude:request:" + rand.Text()
+}
+
+func (r claudeRoute) turnMetadata() turnMetadata {
+	thread := r.session
+	if thread == "" {
+		thread = r.thread
 	}
+	return turnMetadata{ThreadID: thread, ParentThreadID: r.parentSession}
 }
