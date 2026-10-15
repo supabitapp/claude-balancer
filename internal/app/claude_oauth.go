@@ -371,6 +371,32 @@ func claudeCredentialsFromToken(token claudeOAuthTokenResponse, now time.Time) c
 	return credentials
 }
 
+func accountFromClaudeCredentials(credentials *claudeCredentials) *Account {
+	if credentials == nil {
+		return nil
+	}
+	return accountFromState(accountState{
+		IDToken:      claudeIdentityToken(credentials.AccountID, credentials.Email),
+		AccessToken:  credentials.AccessToken,
+		RefreshToken: credentials.RefreshToken,
+		LastRefresh:  credentials.LastRefresh,
+	})
+}
+
+func claudeIdentityToken(accountID, email string) string {
+	payload, _ := json.Marshal(struct {
+		Email string `json:"email"`
+		Auth  struct {
+			AccountID string `json:"chatgpt_account_id"`
+			Plan      string `json:"chatgpt_plan_type"`
+		} `json:"https://api.openai.com/auth"`
+	}{Email: email, Auth: struct {
+		AccountID string `json:"chatgpt_account_id"`
+		Plan      string `json:"chatgpt_plan_type"`
+	}{AccountID: accountID, Plan: "claude"}})
+	return "x." + base64.RawURLEncoding.EncodeToString(payload) + ".x"
+}
+
 func mergeClaudeProfile(credentials *claudeCredentials, profile *claudeOAuthProfile) {
 	if credentials == nil || profile == nil {
 		return
