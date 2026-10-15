@@ -29,12 +29,11 @@ if test -n "$(git -C "$repo" status --porcelain)"; then
 	printf 'refusing to deploy a dirty repo: %s\n' "$repo" >&2
 	exit 1
 fi
-if test "$(git -C "$repo" symbolic-ref --short HEAD)" != "$branch"; then
-	printf 'repo is not on branch %s\n' "$branch" >&2
-	exit 1
-fi
-
 git -C "$repo" fetch --prune origin "$branch"
+current_branch=$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null || true)
+if test "$current_branch" != "$branch"; then
+	git -C "$repo" checkout --force -B "$branch" "origin/$branch"
+fi
 target_revision=$(git -C "$repo" rev-parse "origin/$branch")
 git -C "$repo" merge --ff-only "origin/$branch"
 current_revision=$(git -C "$repo" rev-parse HEAD)

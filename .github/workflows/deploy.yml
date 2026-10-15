@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - khoi/port-claude-balancer
   workflow_dispatch:
 
 permissions: {}
@@ -14,7 +15,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/khoi/port-claude-balancer'
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 15
@@ -27,6 +28,7 @@ jobs:
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_BRANCH: ${{ github.ref_name }}
         run: |
           set +x
           set -euo pipefail
@@ -58,7 +60,7 @@ jobs:
             -o LogLevel=ERROR \
             -p "$DEPLOY_PORT" \
             -l "$DEPLOY_USER" \
-            -- "$DEPLOY_HOST" /usr/local/bin/deploy-claude-balancer \
+            -- "$DEPLOY_HOST" env "CLAUDE_BALANCER_BRANCH=$DEPLOY_BRANCH" /usr/local/bin/deploy-claude-balancer \
             > "$ssh_dir/deploy.log" 2>&1; then
             printf '::error::Deployment failed. Inspect the server through the private SSH connection.\n'
             exit 1
