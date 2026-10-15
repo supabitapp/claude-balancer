@@ -1,6 +1,7 @@
 # claude-balancer
 
-![Claude Balancer dashboard](https://github.com/user-attachments/assets/530effd5-a001-485b-bc92-23340aadfd37)
+<img width="2428" height="1122" alt="CleanShot 2026-10-15 at 23 49 01@2x" src="https://github.com/user-attachments/assets/34f61b6f-9512-41bf-9500-a355cab63065" />
+
 
 `claude-balancer` is a Go proxy that shares Claude Messages API traffic across
 multiple authenticated accounts. It stores account state, route ownership, API
