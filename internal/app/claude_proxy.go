@@ -454,7 +454,9 @@ func (s *server) doClaudeMessages(ctx context.Context, inbound *http.Request, bo
 		return nil, err
 	}
 	route := claudeRouteFrom(inbound, claudeRequestFromBody(body))
-	body = claudeBodyForAccount(body, account, route)
+	if !strings.HasSuffix(inbound.URL.Path, "/count_tokens") {
+		body = claudeBodyForAccount(body, account, route)
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, upstream, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

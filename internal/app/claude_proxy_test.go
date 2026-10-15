@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -79,5 +80,39 @@ func TestClaudeModelsSetsOAuthHeaders(t *testing.T) {
 		if got := seen.Get(name); got != want {
 			t.Fatalf("%s = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestClaudeCountTokensForwardsBodyWithoutMetadata(t *testing.T) {
+	var forwarded []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		forwarded, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read forwarded body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"input_tokens":7}`)
+	}))
+	t.Cleanup(upstream.Close)
+
+	account := accountFromState(accountState{
+		IDToken:     claudeIdentityToken(claudeCredentials{AccountID: "account-uuid", DeviceID: "device-id"}),
+		AccessToken: "access-token",
+	})
+	srv := newTestServer(t, []*Account{account})
+	srv.upstream = upstream.URL
+	body := []byte(`{"model":"claude-haiku-5-5","messages":[{"role":"user","content":"hello"}]}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+	response, err := srv.doClaudeMessages(context.Background(), request, body, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	if string(forwarded) != string(body) {
+		t.Fatalf("forwarded body = %s, want %s", forwarded, body)
 	}
 }
