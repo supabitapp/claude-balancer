@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestMigrateRoutingModesPreservesState(t *testing.T) {
@@ -115,5 +116,39 @@ func TestMigrateRoutingModesPreservesState(t *testing.T) {
 				t.Fatalf("migrated accounts changed after reopening: error = %v", err)
 			}
 		})
+	}
+}
+
+func TestRecordRouteIfOwnerDoesNotOverwriteReboundOwner(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now()
+	_, err = store.MutateAccounts(func(accounts []Account) ([]Account, error) {
+		return []Account{
+			{ID: "a", IDToken: "a", AccessToken: "a", RefreshToken: "a", RoutingMode: "normal", LastRefresh: now, LastUsed: now},
+			{ID: "b", IDToken: "b", AccessToken: "b", RefreshToken: "b", RoutingMode: "normal", LastRefresh: now, LastUsed: now},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRoute(Route{At: now, Thread: "route", Account: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRouteIfOwner(Route{At: now.Add(time.Second), Thread: "route", Account: "b"}, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRouteIfOwner(Route{At: now.Add(2 * time.Second), Thread: "route", Account: "a"}, "a"); err != nil {
+		t.Fatal(err)
+	}
+	owners, err := store.RouteOwners("route", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(owners, []string{"b"}) {
+		t.Fatalf("owners = %v, want rebound owner b", owners)
 	}
 }

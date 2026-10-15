@@ -75,12 +75,16 @@ func TestClaudeModelsSetsOAuthHeaders(t *testing.T) {
 		"Authorization":     "Bearer access-token",
 		"Accept":            "application/json",
 		"Anthropic-Version": "2023-06-01",
-		"Anthropic-Beta":    "oauth-2025-04-20",
 		"Anthropic-Dangerous-Direct-Browser-Access": "true",
 		"X-App": "cli",
 	} {
 		if got := seen.Get(name); got != want {
 			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
+	}
+	for _, beta := range []string{"oauth-2025-04-20", "claude-code-20250219"} {
+		if !strings.Contains(seen.Get("Anthropic-Beta"), beta) {
+			t.Fatalf("Anthropic-Beta = %q, want %q", seen.Get("Anthropic-Beta"), beta)
 		}
 	}
 }
@@ -210,5 +214,120 @@ func TestClaudeMessagesSkipsExhaustedFiveHourWindow(t *testing.T) {
 	srv.claudeMessagesHTTP(response, request)
 	if response.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusTooManyRequests, response.Body.String())
+	}
+}
+
+func TestClaudeRouteFromPreservesSubagentHierarchy(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	request.Header.Set("X-Claude-Code-Session-Id", "root-session")
+	request.Header.Set("X-Claude-Code-Agent-Id", "child-agent")
+	request.Header.Set("X-Claude-Code-Parent-Agent-Id", "parent-agent")
+	route := claudeRouteFrom(request, claudeMessageRequest{})
+	keys := route.keys("claude-sonnet-4-5(high)")
+	if len(keys) != 3 {
+		t.Fatalf("route keys = %v, want child, parent, root", keys)
+	}
+	if keys[0] != "claude:claude-sonnet-4-5:root-session:agent:child-agent" || keys[1] != "claude:claude-sonnet-4-5:root-session:agent:parent-agent" || keys[2] != "claude:claude-sonnet-4-5:root-session" {
+		t.Fatalf("route keys = %v, want canonical model and agent hierarchy", keys)
+	}
+}
+
+func TestClaudeRouteFromParsesLegacyMetadataSession(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	body := claudeMessageRequest{}
+	body.Metadata.UserID = json.RawMessage(`"user_account_session_1234"`)
+	route := claudeRouteFrom(request, body)
+	if route.session != "1234" {
+		t.Fatalf("session = %q, want legacy session suffix", route.session)
+	}
+}
+
+func TestClaude429ScopeDistinguishesCredentialModelAndRequest(t *testing.T) {
+	credential := http.Header{"anthropic-ratelimit-unified-5h-status": {"rejected"}}
+	if got := claude429ScopeFor(credential, nil); got != claude429Credential {
+		t.Fatalf("credential scope = %v, want credential", got)
+	}
+	model := http.Header{
+		"Anthropic-Ratelimit-Unified-5h-Status":    {"allowed"},
+		"Anthropic-Ratelimit-Unified-7d-Status":    {"allowed_warning"},
+		"Anthropic-Ratelimit-Unified-7d_oi-Status": {"rejected"},
+	}
+	if got := claude429ScopeFor(model, nil); got != claude429Model {
+		t.Fatalf("model scope = %v, want model", got)
+	}
+	fast := http.Header{}
+	if got := claude429ScopeFor(fast, []byte("Usage credits are required for fast mode")); got != claude429Request {
+		t.Fatalf("fast scope = %v, want request", got)
+	}
+}
+
+func TestClaudeFastEntitlement429DoesNotCoolModel(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":"Usage credits are required for fast mode"}`)
+	}))
+	t.Cleanup(upstream.Close)
+	account := testAccount("account-uuid", 10)
+	srv := newTestServer(t, []*Account{account})
+	srv.upstream = upstream.URL
+	srv.lookupAPIKey = func(string) (string, bool, error) { return "test", true, nil }
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet","service_tier":"fast","messages":[]}`))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	srv.claudeMessagesHTTP(response, request)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", response.Code)
+	}
+	if got := account.modelCooldownUntil("claude-sonnet"); !got.IsZero() {
+		t.Fatalf("model cooldown = %s, want none", got)
+	}
+}
+
+func TestClaudeStreamRetriesBeforeBootstrapOutput(t *testing.T) {
+	var calls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if calls == 1 {
+			return
+		}
+		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\"}\n\n")
+	}))
+	t.Cleanup(upstream.Close)
+	srv := newTestServer(t, []*Account{testAccount("account-a", 10), testAccount("account-b", 10)})
+	srv.upstream = upstream.URL
+	srv.lookupAPIKey = func(string) (string, bool, error) { return "test", true, nil }
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet","stream":true,"messages":[]}`))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	srv.claudeMessagesHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if calls != 2 {
+		t.Fatalf("upstream calls = %d, want retry before first stream event", calls)
+	}
+	if !strings.Contains(response.Body.String(), "message_start") {
+		t.Fatalf("response = %q, want bootstrap event", response.Body.String())
+	}
+}
+
+func TestClaudeStreamDoesNotRetryAfterBootstrapOutput(t *testing.T) {
+	var calls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\"}\n\n")
+	}))
+	t.Cleanup(upstream.Close)
+	srv := newTestServer(t, []*Account{testAccount("account-a", 10), testAccount("account-b", 10)})
+	srv.upstream = upstream.URL
+	srv.lookupAPIKey = func(string) (string, bool, error) { return "test", true, nil }
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet","stream":true,"messages":[]}`))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	srv.claudeMessagesHTTP(response, request)
+	if response.Code != http.StatusOK || calls != 1 {
+		t.Fatalf("status = %d calls = %d, want 200 and one attempt", response.Code, calls)
 	}
 }

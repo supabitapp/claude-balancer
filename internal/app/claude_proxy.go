@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -41,6 +43,7 @@ type claudeUserIdentity struct {
 	SessionID       string `json:"session_id"`
 	ParentSessionID string `json:"parent_session_id"`
 	AgentID         string `json:"agent_id"`
+	ParentAgentID   string `json:"parent_agent_id"`
 }
 
 func claudeRequestFromBody(body []byte) claudeMessageRequest {
@@ -54,60 +57,155 @@ func claudeIdentityFromMetadata(raw json.RawMessage) claudeUserIdentity {
 	if len(raw) == 0 {
 		return identity
 	}
-	if json.Unmarshal(raw, &identity) == nil && (identity.SessionID != "" || identity.AgentID != "" || identity.ParentSessionID != "") {
+	if json.Unmarshal(raw, &identity) == nil && (identity.SessionID != "" || identity.AgentID != "" || identity.ParentSessionID != "" || identity.ParentAgentID != "") {
 		return identity
 	}
 	var encoded string
 	if json.Unmarshal(raw, &encoded) == nil {
-		_ = json.Unmarshal([]byte(encoded), &identity)
+		if json.Unmarshal([]byte(encoded), &identity) == nil && (identity.SessionID != "" || identity.AgentID != "" || identity.ParentSessionID != "" || identity.ParentAgentID != "") {
+			return identity
+		}
+		if index := strings.LastIndex(encoded, "_session_"); index >= 0 {
+			identity.SessionID = normalizeClaudeID(encoded[index+len("_session_"):])
+		}
 	}
 	return identity
 }
 
 type claudeRoute struct {
-	thread  string
-	session string
+	thread        string
+	session       string
+	parentSession string
+	agent         string
+	parentAgent   string
 }
 
 func claudeRouteKey(model, value string) string {
-	model = strings.TrimSpace(model)
-	value = strings.TrimSpace(value)
+	model = canonicalClaudeModel(model)
+	value = normalizeClaudeID(value)
+	if model == "" || value == "" {
+		return ""
+	}
 	return "claude:" + model + ":" + value
 }
 
-func (r claudeRoute) keys() []string {
-	keys := make([]string, 0, 2)
-	if r.thread != "" {
-		keys = append(keys, r.thread)
+func (r claudeRoute) identities() []string {
+	keys := make([]string, 0, 5)
+	appendKey := func(value string) {
+		value = normalizeClaudeID(value)
+		if value == "" {
+			return
+		}
+		for _, existing := range keys {
+			if existing == value {
+				return
+			}
+		}
+		keys = append(keys, value)
 	}
-	if r.session != "" && r.session != r.thread {
-		keys = append(keys, r.session)
+	if r.session != "" {
+		if r.agent != "" && !strings.EqualFold(r.agent, "main") {
+			appendKey(claudeAgentIdentity(r.session, r.agent))
+		}
+		if r.parentAgent != "" && !strings.EqualFold(r.parentAgent, "main") {
+			appendKey(claudeAgentIdentity(r.session, r.parentAgent))
+		}
+		if r.parentSession != "" {
+			appendKey(normalizeClaudeID(r.parentSession))
+		}
+		appendKey(normalizeClaudeID(r.session))
+	}
+	appendKey(r.thread)
+	return keys
+}
+
+func claudeAgentIdentity(session, agent string) string {
+	identity := normalizeClaudeID(session) + ":agent:" + normalizeClaudeID(agent)
+	if len(identity) <= 256 {
+		return identity
+	}
+	sum := sha256.Sum256([]byte(identity))
+	return identity[:192] + ":" + fmt.Sprintf("%x", sum[:16])
+}
+
+func (r claudeRoute) keys(model string) []string {
+	keys := make([]string, 0, 5)
+	for _, identity := range r.identities() {
+		if key := claudeRouteKey(model, identity); key != "" {
+			keys = append(keys, key)
+		}
 	}
 	return keys
 }
 
+func (r claudeRoute) writeKeys(model string) []string {
+	if r.session != "" {
+		identity := r.session
+		if r.agent != "" && !strings.EqualFold(r.agent, "main") {
+			identity = claudeAgentIdentity(r.session, r.agent)
+		}
+		if key := claudeRouteKey(model, identity); key != "" {
+			return []string{key}
+		}
+	}
+	if key := claudeRouteKey(model, r.thread); key != "" {
+		return []string{key}
+	}
+	return nil
+}
+
 func claudeRouteFrom(r *http.Request, body claudeMessageRequest) claudeRoute {
 	identity := claudeIdentityFromMetadata(body.Metadata.UserID)
-	session := firstWebSocketHeader(r.Header,
-		"x-claude-code-session-id", "x-session-id", "session-id", "session_id")
+	session := normalizeClaudeID(r.Header.Get("X-Claude-Code-Session-Id"))
 	if session == "" {
-		session = strings.TrimSpace(body.Metadata.SessionID)
+		session = normalizeClaudeID(identity.SessionID)
 	}
 	if session == "" {
-		session = strings.TrimSpace(identity.SessionID)
+		session = normalizeClaudeID(body.Metadata.SessionID)
 	}
-	thread := firstWebSocketHeader(r.Header,
-		"x-claude-code-agent-id", "x-claude-code-parent-agent-id", "x-claude-code-thread-id")
+	if session == "" {
+		session = normalizeClaudeID(firstWebSocketHeader(r.Header, "x-session-id", "session-id", "session_id"))
+	}
+	agent := normalizeClaudeID(r.Header.Get("X-Claude-Code-Agent-Id"))
+	if agent == "" {
+		agent = normalizeClaudeID(identity.AgentID)
+	}
+	parentAgent := normalizeClaudeID(r.Header.Get("X-Claude-Code-Parent-Agent-Id"))
+	if parentAgent == "" {
+		parentAgent = normalizeClaudeID(identity.ParentAgentID)
+	}
+	thread := normalizeClaudeID(r.Header.Get("X-Claude-Code-Thread-Id"))
 	if thread == "" {
-		thread = strings.TrimSpace(body.Metadata.ParentID)
+		thread = normalizeClaudeID(body.Metadata.ParentID)
 	}
 	if thread == "" {
-		thread = strings.TrimSpace(identity.AgentID)
+		thread = normalizeClaudeID(identity.ParentSessionID)
 	}
-	if thread == "" {
-		thread = strings.TrimSpace(identity.ParentSessionID)
+	if thread == "" && session == "" {
+		thread = agent
 	}
-	return claudeRoute{thread: thread, session: session}
+	return claudeRoute{thread: thread, session: session, parentSession: normalizeClaudeID(identity.ParentSessionID), agent: agent, parentAgent: parentAgent}
+}
+
+func normalizeClaudeID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 256 {
+		return ""
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return ""
+		}
+	}
+	return value
+}
+
+func canonicalClaudeModel(model string) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if open := strings.LastIndexByte(model, '('); open >= 0 && strings.HasSuffix(model, ")") {
+		model = strings.TrimSpace(model[:open])
+	}
+	return model
 }
 
 func claudeBodyForAccount(body []byte, account *Account, route claudeRoute) []byte {
@@ -134,14 +232,22 @@ func claudeBodyForAccount(body []byte, account *Account, route claudeRoute) []by
 	if identity.SessionID != "" {
 		identityRaw["session_id"] = identity.SessionID
 	}
-	if identity.ParentSessionID != "" {
+	if route.parentSession != "" {
+		identityRaw["parent_session_id"] = route.parentSession
+	} else if identity.ParentSessionID != "" {
 		identityRaw["parent_session_id"] = identity.ParentSessionID
 	}
-	if route.session != "" && identityRaw["session_id"] == "" {
+	if route.session != "" {
 		identityRaw["session_id"] = route.session
 	}
-	if route.thread != "" && identityRaw["parent_session_id"] == "" {
+	if route.parentSession == "" && route.thread != "" && identityRaw["parent_session_id"] == "" {
 		identityRaw["parent_session_id"] = route.thread
+	}
+	if route.agent != "" {
+		identityRaw["agent_id"] = route.agent
+	}
+	if route.parentAgent != "" {
+		identityRaw["parent_agent_id"] = route.parentAgent
 	}
 	encoded, err := json.Marshal(identityRaw)
 	if err != nil {
@@ -226,6 +332,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "no Claude account available")
 			return
 		}
+		s.reserveClaudeRoute(route, parsed.Model, account, owners)
 		response, requestErr := s.doClaudeMessages(ctx, r, body, account)
 		if requestErr != nil {
 			skip[claudeAccountID(account)] = true
@@ -260,43 +367,145 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
+		var failureBody []byte
 		if claudeSafeFailoverStatus(response.StatusCode) && attempt < claudeMaxFailoverAttempt {
 			data, readErr := io.ReadAll(io.LimitReader(response.Body, claudeMaxResponseBody+1))
 			response.Body.Close()
+			scope := claude429Model
+			if response.StatusCode == http.StatusTooManyRequests {
+				scope = claude429ScopeFor(response.Header, data)
+			}
 			if readErr == nil && len(data) <= claudeMaxResponseBody && claudeShouldFailover(response.StatusCode, response.Header, data) {
-				if claudeCredentialRateLimited(response.Header) {
-					account.rateLimited(response.Header)
+				if scope == claude429Credential {
+					account.rateLimitedClaude(response.Header)
+				} else if scope == claude429Model {
+					account.coolModel(parsed.Model, response.Header)
 				}
 				skip[claudeAccountID(account)] = true
 				continue
 			}
+			failureBody = data
 			response.Body = io.NopCloser(bytes.NewReader(data))
+		}
+		if response.StatusCode == http.StatusTooManyRequests && failureBody == nil {
+			data, readErr := io.ReadAll(io.LimitReader(response.Body, claudeMaxResponseBody+1))
+			if readErr == nil && len(data) <= claudeMaxResponseBody {
+				failureBody = data
+				response.Body.Close()
+				response.Body = io.NopCloser(bytes.NewReader(data))
+			}
+		}
+		if parsed.Stream && response.StatusCode >= 200 && response.StatusCode < 300 {
+			bootstrap, stream, streamErr := claudeStreamBootstrap(response.Body)
+			if streamErr != nil {
+				response.Body.Close()
+				if ctx.Err() != nil {
+					writeError(w, http.StatusBadGateway, "Claude stream canceled before output")
+					return
+				}
+				if attempt < claudeMaxFailoverAttempt {
+					skip[claudeAccountID(account)] = true
+					continue
+				}
+				writeError(w, http.StatusBadGateway, "Claude stream ended before output")
+				return
+			}
+			response.Body = &claudeStreamReadCloser{Reader: io.MultiReader(bytes.NewReader(bootstrap), stream), stream: stream}
 		}
 		defer response.Body.Close()
 		account.observeClaudeHeaders(response.Header)
 		copyClaudeResponseHeaders(w.Header(), response.Header)
 		w.WriteHeader(response.StatusCode)
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
-			s.recordClaudeRoute(route, parsed.Model, account)
 			if s.stats != nil && !strings.HasSuffix(r.URL.Path, "/count_tokens") {
 				var responseBody bytes.Buffer
-				_, _ = io.CopyN(io.MultiWriter(w, &responseBody), response.Body, claudeMaxResponseBody)
-				s.stats.recordClaudeResponse(time.Now(), claudeAccountID(account), parsed.Model, claudeResponseUsage(responseBody.Bytes()))
+				_, copyErr := io.Copy(io.MultiWriter(w, &responseBody), io.LimitReader(response.Body, claudeMaxResponseBody))
+				if copyErr == nil && responseBody.Len() <= claudeMaxResponseBody {
+					account.successfulClaudeModel(parsed.Model)
+					s.recordClaudeRoute(route, parsed.Model, account, owners)
+					s.stats.recordClaudeResponse(time.Now(), claudeAccountID(account), parsed.Model, claudeResponseUsage(responseBody.Bytes()))
+				}
 				return
 			}
+			_, copyErr := io.Copy(w, io.LimitReader(response.Body, claudeMaxResponseBody))
+			if copyErr == nil {
+				account.successfulClaudeModel(parsed.Model)
+				s.recordClaudeRoute(route, parsed.Model, account, owners)
+			}
+			return
 		}
-		_, _ = io.CopyN(w, response.Body, claudeMaxResponseBody)
+		_, _ = io.Copy(w, io.LimitReader(response.Body, claudeMaxResponseBody))
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			if response.StatusCode == http.StatusTooManyRequests {
-				if claudeCredentialRateLimited(response.Header) {
-					account.rateLimited(response.Header)
-				} else {
+				scope := claude429ScopeFor(response.Header, failureBody)
+				if scope == claude429Credential {
+					account.rateLimitedClaude(response.Header)
+				} else if scope == claude429Model {
 					account.coolModel(parsed.Model, response.Header)
 				}
 			}
 		}
 		return
 	}
+}
+
+type claudeStreamReadCloser struct {
+	io.Reader
+	stream io.Closer
+}
+
+func (r *claudeStreamReadCloser) Close() error {
+	return r.stream.Close()
+}
+
+func claudeStreamBootstrap(body io.ReadCloser) ([]byte, io.ReadCloser, error) {
+	const maxBootstrap = 64 << 10
+	buffer := make([]byte, 0, 4096)
+	chunk := make([]byte, 4096)
+	for len(buffer) < maxBootstrap {
+		n, err := body.Read(chunk)
+		if n > 0 {
+			buffer = append(buffer, chunk[:n]...)
+			if claudeStreamBootstrapReady(buffer) {
+				return buffer, body, nil
+			}
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return nil, nil, errors.New("Claude stream bootstrap exceeded limit")
+}
+
+func claudeStreamBootstrapReady(data []byte) bool {
+	for {
+		boundary := bytes.Index(data, []byte("\n\n"))
+		if boundary < 0 {
+			return false
+		}
+		event := data[:boundary]
+		for _, line := range bytes.Split(event, []byte("\n")) {
+			if bytes.HasPrefix(bytes.TrimSpace(line), []byte("data:")) && len(bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(line), []byte("data:")))) > 0 {
+				return true
+			}
+		}
+		data = data[boundary+2:]
+	}
+}
+
+func (s *server) reserveClaudeRoute(route claudeRoute, model string, account *Account, owners []string) {
+	if account == nil || s.pool == nil || s.pool.store == nil {
+		return
+	}
+	keys := route.writeKeys(model)
+	if len(keys) == 0 {
+		return
+	}
+	expected := ""
+	if len(owners) > 0 {
+		expected = owners[0]
+	}
+	_ = s.pool.store.recordRouteIfOwner(storedRoute{At: time.Now(), Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}, expected)
 }
 
 func (s *server) claudeModels(w http.ResponseWriter, r *http.Request) {
@@ -387,18 +596,9 @@ func (s *server) claudeRouteOwners(route claudeRoute, model string) ([]string, e
 	if s.pool == nil || s.pool.store == nil {
 		return nil, nil
 	}
-	owners := make([]string, 0, 2)
-	if route.thread != "" {
-		values, err := s.pool.store.routeOwnersFresh(claudeRouteKey(model, route.thread), "", time.Hour)
-		if err != nil {
-			return nil, err
-		}
-		for _, value := range values {
-			owners = appendUniqueOwner(owners, value)
-		}
-	}
-	if route.session != "" {
-		values, err := s.pool.store.routeOwnersFresh("", claudeRouteKey(model, route.session), time.Hour)
+	owners := make([]string, 0, 3)
+	for _, key := range route.keys(model) {
+		values, err := s.pool.store.routeOwnersFresh(key, "", time.Hour)
 		if err != nil {
 			return nil, err
 		}
@@ -471,7 +671,7 @@ func (s *server) selectClaudeAccountForModel(owners []string, skip map[string]bo
 			}
 		}
 	}
-	var selected *Account
+	var candidates []*Account
 	selectedRank := 2
 	for _, account := range accounts {
 		if !eligible(account) {
@@ -482,12 +682,18 @@ func (s *server) selectClaudeAccountForModel(owners []string, skip map[string]bo
 		if candidate.mode == routingModePriority {
 			rank = 0
 		}
-		if selected == nil || rank < selectedRank || rank == selectedRank && candidate.lastUsed.Before(selected.routingCandidate().lastUsed) {
-			selected = account
+		if rank < selectedRank {
+			candidates = candidates[:0]
 			selectedRank = rank
 		}
+		if rank == selectedRank {
+			candidates = append(candidates, account)
+		}
 	}
-	return selected
+	if len(candidates) == 0 {
+		return nil
+	}
+	return s.pool.selectClaudeRoundRobin(model, candidates)
 }
 
 func (s *server) doClaudeMessages(ctx context.Context, inbound *http.Request, body []byte, account *Account) (*http.Response, error) {
@@ -507,11 +713,17 @@ func (s *server) doClaudeMessages(ctx context.Context, inbound *http.Request, bo
 	state := account.persisted()
 	setClaudeUpstreamHeaders(request.Header, state.AccessToken)
 	request.Header.Set("Content-Type", "application/json")
-	if route.session != "" && request.Header.Get("X-Claude-Code-Session-Id") == "" {
+	request.Header.Del("X-Claude-Code-Session-Id")
+	request.Header.Del("X-Claude-Code-Agent-Id")
+	request.Header.Del("X-Claude-Code-Parent-Agent-Id")
+	if route.session != "" {
 		request.Header.Set("X-Claude-Code-Session-Id", route.session)
 	}
-	if route.thread != "" && request.Header.Get("X-Claude-Code-Agent-Id") == "" {
-		request.Header.Set("X-Claude-Code-Agent-Id", route.thread)
+	if route.agent != "" {
+		request.Header.Set("X-Claude-Code-Agent-Id", route.agent)
+	}
+	if route.parentAgent != "" {
+		request.Header.Set("X-Claude-Code-Parent-Agent-Id", route.parentAgent)
 	}
 	client := s.client
 	if client == nil {
@@ -555,9 +767,17 @@ func setClaudeUpstreamHeaders(header http.Header, accessToken string) {
 	if header.Get("Anthropic-Version") == "" {
 		header.Set("Anthropic-Version", "2023-06-01")
 	}
-	if header.Get("Anthropic-Beta") == "" {
-		header.Set("Anthropic-Beta", "oauth-2025-04-20")
+	betas := header.Values("Anthropic-Beta")
+	joined := strings.Join(betas, ",")
+	for _, beta := range []string{"oauth-2025-04-20", "claude-code-20250219"} {
+		if !strings.Contains(strings.ToLower(joined), beta) {
+			if joined != "" {
+				joined += ","
+			}
+			joined += beta
+		}
 	}
+	header.Set("Anthropic-Beta", joined)
 	if header.Get("Anthropic-Dangerous-Direct-Browser-Access") == "" {
 		header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
 	}
@@ -590,7 +810,7 @@ func copyClaudeResponseHeaders(dst, src http.Header) {
 
 func claudeSafeFailoverStatus(status int) bool {
 	switch status {
-	case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests,
+	case http.StatusForbidden, http.StatusRequestTimeout, http.StatusTooManyRequests,
 		http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable,
 		http.StatusGatewayTimeout, 529:
 		return true
@@ -600,46 +820,131 @@ func claudeSafeFailoverStatus(status int) bool {
 }
 
 func claudeShouldFailover(status int, headers http.Header, body []byte) bool {
-	if status != http.StatusTooManyRequests {
-		return true
-	}
-	if claudeCredentialRateLimited(headers) {
-		return true
-	}
-	text := strings.ToLower(string(body))
-	for _, phrase := range []string{
-		"fast request rejected", "usage credits are required", "credits are required",
-		"model overloaded", "model is overloaded", "model rate limit", "model quota",
-		"overage", "fable",
-	} {
-		if strings.Contains(text, phrase) {
-			return false
-		}
-	}
-	return true
+	return status != http.StatusTooManyRequests || claude429ScopeFor(headers, body) != claude429Request
 }
 
 func claudeCredentialRateLimited(headers http.Header) bool {
-	for _, name := range []string{
-		"anthropic-ratelimit-unified-5h-status",
-		"anthropic-ratelimit-unified-7d-status",
-	} {
-		status := strings.ToLower(strings.TrimSpace(headers.Get(name)))
-		if status != "" && status != "accepted" && status != "ok" {
-			return true
-		}
-	}
-	return false
+	return claude429ScopeFor(headers, nil) == claude429Credential
 }
 
-func (s *server) recordClaudeRoute(route claudeRoute, model string, account *Account) {
-	if account == nil || s.pool == nil || s.pool.store == nil || route.thread == "" && route.session == "" {
+type claude429Scope uint8
+
+const (
+	claude429Model claude429Scope = iota
+	claude429Credential
+	claude429Request
+)
+
+func claudeHeaderValue(headers http.Header, name string) string {
+	for key, values := range headers {
+		if !strings.EqualFold(key, name) || len(values) == 0 {
+			continue
+		}
+		return strings.TrimSpace(values[0])
+	}
+	return ""
+}
+
+func claudeStatusHealthy(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "allowed", "allowed_warning", "accepted", "ok":
+		return true
+	default:
+		return false
+	}
+}
+
+func claudeStatusRejected(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "rejected")
+}
+
+func claudeSharedHealthy(headers http.Header, fiveHour, sevenDay string) bool {
+	if claudeStatusHealthy(fiveHour) && claudeStatusHealthy(sevenDay) {
+		return true
+	}
+	valid := 0
+	for _, pair := range []struct {
+		status string
+		name   string
+	}{
+		{fiveHour, "anthropic-ratelimit-unified-5h-utilization"},
+		{sevenDay, "anthropic-ratelimit-unified-7d-utilization"},
+	} {
+		if pair.status != "" {
+			if !claudeStatusHealthy(pair.status) {
+				return false
+			}
+			valid++
+			continue
+		}
+		value, err := strconv.ParseFloat(claudeHeaderValue(headers, pair.name), 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value >= 1 {
+			return false
+		}
+		valid++
+	}
+	return valid == 2
+}
+
+func claude429ScopeFor(headers http.Header, body []byte) claude429Scope {
+	fiveHour := claudeHeaderValue(headers, "anthropic-ratelimit-unified-5h-status")
+	sevenDay := claudeHeaderValue(headers, "anthropic-ratelimit-unified-7d-status")
+	weeklyOI := claudeHeaderValue(headers, "anthropic-ratelimit-unified-7d_oi-status")
+	overage := claudeHeaderValue(headers, "anthropic-ratelimit-unified-overage-status")
+	unified := claudeHeaderValue(headers, "anthropic-ratelimit-unified-status")
+	representative := strings.ToLower(claudeHeaderValue(headers, "anthropic-ratelimit-unified-representative-claim"))
+	overageDisabled := strings.TrimSpace(claudeHeaderValue(headers, "anthropic-ratelimit-unified-overage-disabled-reason")) != ""
+	headerSignal := fiveHour != "" || sevenDay != "" || weeklyOI != "" || overage != "" || unified != ""
+	sharedHealthy := claudeSharedHealthy(headers, fiveHour, sevenDay)
+	modelRejected := claudeStatusRejected(weeklyOI) || claudeStatusRejected(overage) || strings.Contains(representative, "overage") || overageDisabled
+	if claudeStatusRejected(fiveHour) || claudeStatusRejected(sevenDay) {
+		return claude429Credential
+	}
+	if modelRejected && sharedHealthy {
+		return claude429Model
+	}
+	if claudeStatusRejected(unified) {
+		if modelRejected && sharedHealthy {
+			return claude429Model
+		}
+		return claude429Credential
+	}
+	if headerSignal {
+		if modelRejected && sharedHealthy {
+			return claude429Model
+		}
+		for _, status := range []string{fiveHour, sevenDay, weeklyOI, overage, unified} {
+			if status != "" && !claudeStatusHealthy(status) {
+				return claude429Credential
+			}
+		}
+		return claude429Model
+	}
+	text := strings.ToLower(string(body))
+	for _, phrase := range []string{"fast request rejected", "usage credits are required", "credits are required"} {
+		if strings.Contains(text, phrase) {
+			return claude429Request
+		}
+	}
+	for _, phrase := range []string{"model overloaded", "model is overloaded", "model rate limit", "model quota"} {
+		if strings.Contains(text, phrase) {
+			return claude429Model
+		}
+	}
+	return claude429Model
+}
+
+func (s *server) recordClaudeRoute(route claudeRoute, model string, account *Account, owners []string) {
+	if account == nil || s.pool == nil || s.pool.store == nil || len(route.writeKeys(model)) == 0 {
 		return
 	}
 	at := time.Now()
-	_ = s.pool.store.recordRoute(storedRoute{
-		At: at, Thread: claudeRouteKey(model, route.thread), Session: claudeRouteKey(model, route.session), Account: claudeAccountID(account),
-	})
+	keys := route.writeKeys(model)
+	expected := ""
+	if len(owners) > 0 {
+		expected = owners[0]
+	}
+	_ = s.pool.store.recordRouteIfOwner(storedRoute{At: at, Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}, expected)
 	account.accepted(at)
 }
 
@@ -662,6 +967,9 @@ func claudeAccountID(account *Account) string {
 }
 
 func (a *Account) observeClaudeHeaders(h http.Header) {
+	if claudeCredentialRateLimited(h) {
+		a.rateLimitedClaude(h)
+	}
 	for _, prefix := range []string{
 		"anthropic-ratelimit-unified-5h", "anthropic-ratelimit-unified-7d",
 		"x-ratelimit-5h", "x-ratelimit-7d",
@@ -685,30 +993,106 @@ func (a *Account) observeClaudeHeaders(h http.Header) {
 func (a *Account) modelCooldownUntil(model string) time.Time {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.modelCooldown[strings.TrimSpace(model)]
+	return a.modelCooldown[canonicalClaudeModel(model)]
+}
+
+func (a *Account) successfulClaudeModel(model string) {
+	model = canonicalClaudeModel(model)
+	a.mu.Lock()
+	if a.modelCooldownAttempts != nil {
+		delete(a.modelCooldownAttempts, model)
+	}
+	a.mu.Unlock()
 }
 
 func (a *Account) coolModel(model string, h http.Header) {
-	model = strings.TrimSpace(model)
+	model = canonicalClaudeModel(model)
 	if model == "" {
 		return
 	}
-	until := time.Now().Add(minCooldown)
-	if retryAfter := retryAfterHeader(h); retryAfter.After(until) {
-		until = retryAfter
-	}
-	limit := time.Now().Add(maxCooldown)
-	if until.After(limit) {
-		until = limit
-	}
+	now := time.Now()
 	a.mu.Lock()
 	if a.modelCooldown == nil {
 		a.modelCooldown = make(map[string]time.Time)
 	}
+	if a.modelCooldownAttempts == nil {
+		a.modelCooldownAttempts = make(map[string]int)
+	}
+	a.modelCooldownAttempts[model]++
+	attempt := a.modelCooldownAttempts[model]
+	a.mu.Unlock()
+	delay := minCooldown
+	for index := 1; index < attempt && delay < 30*time.Minute; index++ {
+		delay *= 2
+	}
+	if delay > 30*time.Minute {
+		delay = 30 * time.Minute
+	}
+	until := now.Add(delay)
+	modelOnlyQuota := claudeHeaderValue(h, "anthropic-ratelimit-unified-7d_oi-status") != "" ||
+		claudeHeaderValue(h, "anthropic-ratelimit-unified-overage-status") != "" ||
+		claudeHeaderValue(h, "anthropic-ratelimit-unified-overage-disabled-reason") != ""
+	if !modelOnlyQuota {
+		if retryAfter := retryAfterHeader(h); retryAfter.After(until) {
+			until = retryAfter
+		}
+	}
+	a.mu.Lock()
 	if until.After(a.modelCooldown[model]) {
 		a.modelCooldown[model] = until
 	}
 	a.mu.Unlock()
+}
+
+func (a *Account) rateLimitedClaude(h http.Header) {
+	now := time.Now()
+	until := claudeRateLimitReset(h, now)
+	if until.IsZero() {
+		until = now.Add(minCooldown)
+	}
+	a.extendCooldown(until)
+}
+
+func claudeRateLimitReset(h http.Header, now time.Time) time.Time {
+	scope := claude429ScopeFor(h, nil)
+	if scope != claude429Credential {
+		return time.Time{}
+	}
+	var latest time.Time
+	consider := func(value string) {
+		reset := parseClaudeReset(value)
+		if reset.After(now) && (latest.IsZero() || reset.After(latest)) {
+			latest = reset
+		}
+	}
+	if retryAfter := claudeRetryAfterHeader(h, now); retryAfter.After(now) {
+		latest = retryAfter
+	}
+	for _, name := range []string{
+		"anthropic-ratelimit-unified-reset",
+		"anthropic-ratelimit-unified-5h-reset",
+		"anthropic-ratelimit-unified-5h-reset-at",
+		"anthropic-ratelimit-unified-7d-reset",
+		"anthropic-ratelimit-unified-7d-reset-at",
+	} {
+		consider(claudeHeaderValue(h, name))
+	}
+	max := now.Add(7*24*time.Hour + time.Hour)
+	if latest.After(max) {
+		return now.Add(minCooldown)
+	}
+	return latest
+}
+
+func claudeRetryAfterHeader(h http.Header, now time.Time) time.Time {
+	value := claudeHeaderValue(h, "retry-after")
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		return now.Add(time.Duration(min(seconds, int64(7*24*time.Hour/time.Second+time.Hour/time.Second))) * time.Second)
+	}
+	if date, err := http.ParseTime(value); err == nil {
+		return date
+	}
+	return time.Time{}
 }
 
 func parseClaudeReset(value string) time.Time {

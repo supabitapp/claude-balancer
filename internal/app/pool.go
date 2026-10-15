@@ -20,10 +20,40 @@ const (
 )
 
 type Pool struct {
-	store     *StateStore
-	storageMu contextMutex
-	mu        sync.RWMutex
-	accounts  []*Account
+	store        *StateStore
+	storageMu    contextMutex
+	mu           sync.RWMutex
+	accounts     []*Account
+	routingMu    sync.Mutex
+	claudeCursor map[string]string
+}
+
+func (p *Pool) selectClaudeRoundRobin(model string, accounts []*Account) *Account {
+	if len(accounts) == 0 {
+		return nil
+	}
+	ordered := append([]*Account(nil), accounts...)
+	slices.SortFunc(ordered, func(left, right *Account) int {
+		return strings.Compare(claudeAccountID(left), claudeAccountID(right))
+	})
+	model = canonicalClaudeModel(model)
+	p.routingMu.Lock()
+	defer p.routingMu.Unlock()
+	if p.claudeCursor == nil {
+		p.claudeCursor = make(map[string]string)
+	}
+	previous := p.claudeCursor[model]
+	selected := ordered[0]
+	if previous != "" {
+		for _, account := range ordered {
+			if claudeAccountID(account) > previous {
+				selected = account
+				break
+			}
+		}
+	}
+	p.claudeCursor[model] = claudeAccountID(selected)
+	return selected
 }
 
 type routingCandidate struct {
@@ -472,7 +502,7 @@ func (a *Account) rateLimited(h http.Header) {
 }
 
 func retryAfterHeader(h http.Header) time.Time {
-	retryAfter := strings.TrimSpace(h.Get("retry-after"))
+	retryAfter := claudeHeaderValue(h, "retry-after")
 	if secs, err := strconv.ParseUint(retryAfter, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) && strings.Trim(retryAfter, "0123456789") == "" {
 		// Saturate before converting seconds to a nanosecond duration.
 		secs = min(secs, uint64(maxCooldown/time.Second))

@@ -23,11 +23,11 @@ func (c routingCandidate) quotaRetryAt(model string, now time.Time) time.Time {
 		if !candidate.exhausted(now) || candidate.resetsAt.IsZero() {
 			continue
 		}
-		if retryAt.IsZero() || candidate.resetsAt.Before(retryAt) {
+		if retryAt.IsZero() || candidate.resetsAt.After(retryAt) {
 			retryAt = candidate.resetsAt
 		}
 	}
-	if isFableModel(model) && c.fable.exhausted(now) && !c.fable.resetsAt.IsZero() && (retryAt.IsZero() || c.fable.resetsAt.Before(retryAt)) {
+	if isFableModel(model) && c.fable.exhausted(now) && !c.fable.resetsAt.IsZero() && (retryAt.IsZero() || c.fable.resetsAt.After(retryAt)) {
 		retryAt = c.fable.resetsAt
 	}
 	return retryAt

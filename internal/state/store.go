@@ -98,6 +98,7 @@ type Route struct {
 	At      time.Time
 	Session string
 	Thread  string
+	Aliases []string
 	Account string
 }
 
@@ -451,7 +452,41 @@ func (s *Store) RecordRoute(route Route) error {
 		if changed == 0 {
 			return fmt.Errorf("route account %q does not exist", route.Account)
 		}
-		return upsertRouteOwners(context.Background(), conn, route.At, route.Account, routeKeys(route.Thread, route.Session))
+		return upsertRouteOwners(context.Background(), conn, route.At, route.Account, routeKeys(route.Thread, route.Session, route.Aliases...))
+	})
+}
+
+func (s *Store) RecordRouteIfOwner(route Route, expected string) error {
+	if route.At.IsZero() || route.Account == "" {
+		return errors.New("route has no time or account")
+	}
+	return s.immediate(func(conn *sql.Conn) error {
+		result, err := conn.ExecContext(context.Background(), `UPDATE accounts SET last_used_at_ns = max(last_used_at_ns, ?)
+			WHERE account_id = ?`, encodeTime(route.At), route.Account)
+		if err != nil {
+			return err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if changed == 0 {
+			return fmt.Errorf("route account %q does not exist", route.Account)
+		}
+		for _, key := range routeKeys(route.Thread, route.Session, route.Aliases...) {
+			if expected == "" {
+				_, err = conn.ExecContext(context.Background(), `INSERT INTO routes (key, account_id, updated_at_ns)
+					VALUES (?, ?, ?) ON CONFLICT (key) DO NOTHING`, key, route.Account, encodeTime(route.At))
+			} else {
+				_, err = conn.ExecContext(context.Background(), `INSERT INTO routes (key, account_id, updated_at_ns)
+					VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET account_id = excluded.account_id,
+					updated_at_ns = excluded.updated_at_ns WHERE routes.account_id = ?`, key, route.Account, encodeTime(route.At), expected)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -526,13 +561,28 @@ func (s *Store) routeOwners(thread, session string, since time.Time) ([]string, 
 	return owners, nil
 }
 
-func routeKeys(thread, session string) []string {
-	keys := make([]string, 0, 2)
+func routeKeys(thread, session string, aliases ...string) []string {
+	keys := make([]string, 0, 2+len(aliases))
 	if thread != "" {
 		keys = append(keys, thread)
 	}
 	if session != "" && session != thread {
 		keys = append(keys, session)
+	}
+	for _, key := range aliases {
+		if key == "" {
+			continue
+		}
+		seen := false
+		for _, existing := range keys {
+			if existing == key {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			keys = append(keys, key)
+		}
 	}
 	return keys
 }

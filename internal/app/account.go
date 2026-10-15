@@ -40,20 +40,21 @@ type Account struct {
 	inflight            *accountRefresh
 	rejectedAccessToken authorizationRevision
 
-	cooldown        time.Time
-	modelCooldown   map[string]time.Time
-	planType        string
-	primary         window
-	secondary       window
-	fable           window
-	spent           bool
-	resetCredits    resetCreditState
-	spendControl    *spendControlPayload
-	credits         *creditsPayload
-	creditsRejected bool
-	usageFetchedAt  time.Time
-	planFetchedAt   time.Time
-	lastUsed        time.Time
+	cooldown              time.Time
+	modelCooldown         map[string]time.Time
+	modelCooldownAttempts map[string]int
+	planType              string
+	primary               window
+	secondary             window
+	fable                 window
+	spent                 bool
+	resetCredits          resetCreditState
+	spendControl          *spendControlPayload
+	credits               *creditsPayload
+	creditsRejected       bool
+	usageFetchedAt        time.Time
+	planFetchedAt         time.Time
+	lastUsed              time.Time
 }
 
 type authorizationRevision [sha256.Size]byte
