@@ -19,6 +19,16 @@ func accessTokenExpiringAt(expiresAt time.Time) string {
 	return "x." + payload + ".x"
 }
 
+func TestClaudeAccountWithoutQuotaSnapshotIsLive(t *testing.T) {
+	account := accountFromState(accountState{
+		IDToken:     claudeIdentityToken(claudeCredentials{AccountID: "account"}),
+		AccessToken: "access-token",
+	})
+	if got := account.status(time.Now()); got != accountLive {
+		t.Fatalf("status = %q, want %q", got, accountLive)
+	}
+}
+
 func TestAccountRefreshDueUsesAccessTokenExpiry(t *testing.T) {
 	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
 	for _, test := range []struct {

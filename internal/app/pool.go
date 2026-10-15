@@ -29,6 +29,7 @@ type Pool struct {
 type routingCandidate struct {
 	account         *Account
 	id              string
+	provider        string
 	plan            string
 	paused          bool
 	reauth          string
@@ -305,6 +306,7 @@ func (a *Account) routingCandidate() routingCandidate {
 	return routingCandidate{
 		account:   a,
 		id:        id,
+		provider:  claims.Provider,
 		plan:      plan,
 		paused:    a.Paused,
 		reauth:    a.Reauth,
@@ -338,7 +340,8 @@ func (c routingCandidate) status(now time.Time) accountStatus {
 	if c.creditAvailable(now) {
 		return accountCredits
 	}
-	status := accountStatusAt(c.paused, c.reauth, c.cooldown, c.spent || c.weeklyExhausted(), c.quotaKnown(), now)
+	quotaKnown := c.quotaKnown() || strings.EqualFold(c.provider, "claude")
+	status := accountStatusAt(c.paused, c.reauth, c.cooldown, c.spent || c.weeklyExhausted(), quotaKnown, now)
 	if status == accountLive {
 		if c.mode == routingModePriority {
 			return accountPriority

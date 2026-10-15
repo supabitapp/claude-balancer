@@ -51,6 +51,7 @@ func serverCmd(args []string) (resultErr error) {
 	otelTracing := fs.Bool("otel", false, "export OpenTelemetry traces using OTLP HTTP environment settings")
 	plain := fs.Bool("no-tui", false, "show logs on stderr instead of the dashboard")
 	logPath := fs.String("log-file", defaultLogPath(), "log file; empty disables file logging")
+	poll := fs.Duration("poll", 10*time.Minute, "how often to refresh Claude account limits; 0 turns it off")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -136,6 +137,9 @@ func serverCmd(args []string) (resultErr error) {
 	pool.watch(ctx, func(change poolChange) {
 		log.Info("accounts updated", "added", change.added, "removed", change.removed, "updated", change.updated)
 		stats.note("accounts updated", "", fmt.Sprintf("%d added, %d removed, %d updated", change.added, change.removed, change.updated))
+		if change.added > 0 && *poll > 0 {
+			go srv.pollAllUsage(ctx)
+		}
 	}, func(err error) {
 		log.Warn("account watch failed", "error", err)
 		stats.note("account watch failed", "", err.Error())
@@ -168,6 +172,14 @@ func serverCmd(args []string) (resultErr error) {
 	defer listener.Close()
 
 	go srv.watchPriceCatalog(ctx)
+	if *poll > 0 {
+		log.Info("loading initial Claude account limits", "accounts", pool.count())
+		go func() {
+			srv.pollAllUsage(ctx)
+			log.Info("initial Claude account limit refresh complete", "accounts", pool.count())
+		}()
+		go srv.watchUsage(ctx, *poll)
+	}
 
 	serving := make(chan error, 1)
 	go func() {
