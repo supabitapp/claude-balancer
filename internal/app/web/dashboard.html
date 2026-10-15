@@ -87,12 +87,12 @@
 <th>Plan</th>
 <th>Status</th>
 {{if $.Admin}}<th>Routing</th>
-{{end}}<th>Weekly %</th>
-<th>Banked</th>
-<th>Credits</th>
+{{end}}<th>7d left %</th>
+<th>Reset credits</th>
+<th>Extra usage</th>
 <th>Reset in</th>
-<th>Burnt this month</th>
-<th>WS</th>
+<th>Est. USD</th>
+<th>Requests 24h</th>
 <th>Traffic 24h %</th>
 <th>Activity 24h</th>
 {{if $.Admin}}<th class="actions"><span class="visually-hidden">Actions</span></th>
@@ -107,7 +107,7 @@
 <td>{{if .CreditsInfo}}<span id="{{.DOMID}}-credits" class="has-tooltip" data-tooltip="{{.CreditsInfo}}" aria-describedby="dashboard-tooltip" tabindex="0">{{.Credits}}</span>{{else}}{{.Credits}}{{end}}</td>
 <td class="dim">{{.ResetIn}}</td>
 <td>{{if .MonthlyBurnInfo}}<span id="{{.DOMID}}-monthly-burn" class="has-tooltip" data-tooltip="{{.MonthlyBurnInfo}}" aria-describedby="dashboard-tooltip" tabindex="0">{{.MonthlyBurn}}</span>{{else}}{{.MonthlyBurn}}{{end}}</td>
-<td>{{.OpenWebSockets}}</td>
+<td>{{.Requests}}</td>
 <td class="dim">{{.Traffic}}</td>
 <td class="spark">{{.Activity}}</td>
 {{if $.Admin}}<td class="actions">{{template "account-actions" ($.Admin.With .)}}</td>

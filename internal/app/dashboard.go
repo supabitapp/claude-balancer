@@ -83,7 +83,7 @@ type dashboardAccountView struct {
 	ResetIn         string
 	MonthlyBurn     string
 	MonthlyBurnInfo string
-	OpenWebSockets  string
+	Requests        string
 	Traffic         string
 	Activity        string
 }
@@ -465,7 +465,7 @@ func (s *server) dashboardAt(now time.Time, private bool) dashboardView {
 			ResetIn:         account.ResetIn,
 			MonthlyBurn:     formatAPIPrice(usage.APICostNanoDollars, usage.UnpricedResponses),
 			MonthlyBurnInfo: monthlyBurnInfo,
-			OpenWebSockets:  dashboardNumber(account.OpenWebSockets),
+			Requests:        dashboardNumber(activityTotal(account.Activity)),
 			Traffic:         dashboardNumber(account.Traffic24hPercent),
 			Activity:        sparkline(account.Activity),
 		}
@@ -526,8 +526,7 @@ func (s *server) dashboardAt(now time.Time, private bool) dashboardView {
 	if modelCosts := formatModelCosts(snapshot.ModelCosts); modelCosts != "" {
 		priceInfo = modelCosts + "\n" + priceInfo
 	}
-	mode, _ := s.fastMode.snapshot()
-	overview := []dashboardMetric{{Name: "fast mode", Value: mode.label(), Info: mode.description()}, {Name: "active WS", Value: strconv.FormatInt(snapshot.WSOpen, 10)}}
+	overview := []dashboardMetric{{Name: "active threads", Value: strconv.Itoa(len(snapshot.Threads))}}
 	overview = append(overview, dashboardResourceMetrics(s.resources.usage(now))...)
 	overview = append(overview,
 		dashboardMetric{Name: "uptime", Value: short(snapshot.Uptime)},
@@ -535,7 +534,7 @@ func (s *server) dashboardAt(now time.Time, private bool) dashboardView {
 		dashboardMetric{Name: "cached input", Value: formatTokenCount(snapshot.MonthlyUsage.InputDetails.CachedTokens), Info: monthInfo},
 		dashboardMetric{Name: "output tokens", Value: formatTokenCount(snapshot.MonthlyUsage.OutputTokens), Info: monthInfo},
 		dashboardMetric{
-			Name:  "USD burnt this month",
+			Name:  "estimated USD this month",
 			Value: formatAPIPrice(snapshot.APICostNanoDollars, snapshot.UnpricedResponses),
 			Info:  priceInfo,
 		},
