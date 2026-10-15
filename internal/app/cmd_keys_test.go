@@ -38,20 +38,21 @@ func testAPIKeyAccountID(t *testing.T, key string) string {
 	if err := json.Unmarshal(headerJSON, &header); err != nil || header.Alg != "HS256" || header.Typ != "JWT" {
 		t.Fatalf("invalid JWT header: %+v, %v", header, err)
 	}
-	// Unpatched pi uses atob(), not a base64url-aware decoder, for this segment.
 	payloadJSON, err := base64.RawStdEncoding.DecodeString(parts[1])
 	if err != nil {
 		t.Fatalf("payload is not compatible with pi's atob decoder: %v", err)
 	}
 	var payload struct {
-		Auth struct {
-			AccountID string `json:"chatgpt_account_id"`
-		} `json:"https://api.openai.com/auth"`
+		Provider  string `json:"provider"`
+		AccountID string `json:"account_id"`
 	}
 	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
 		t.Fatal(err)
 	}
-	id := payload.Auth.AccountID
+	if payload.Provider != "claude" {
+		t.Fatalf("provider = %q", payload.Provider)
+	}
+	id := payload.AccountID
 	rawID, err := hex.DecodeString(strings.TrimPrefix(id, "cb_"))
 	if !strings.HasPrefix(id, "cb_") || err != nil || len(rawID) != 16 {
 		t.Fatalf("invalid synthetic account ID %q", id)

@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ApplicationID = 0x43425853
+	ApplicationID = 0x434C4253
 	schemaVersion = 9
 )
 
@@ -204,7 +204,7 @@ func (s *Store) initialize() error {
 		return tx.Commit()
 	}
 	if applicationID != ApplicationID {
-		return fmt.Errorf("%s is not a codex-balancer state database", s.path)
+		return fmt.Errorf("%s is not a claude-balancer state database", s.path)
 	}
 	if version == 1 {
 		if err := s.migrateUsageAccounts(); err != nil {
@@ -492,10 +492,27 @@ func upsertRouteOwners(ctx context.Context, exec sqlExecer, at time.Time, accoun
 }
 
 func (s *Store) RouteOwners(thread, session string) ([]string, error) {
+	return s.routeOwners(thread, session, time.Time{})
+}
+
+func (s *Store) RouteOwnersFresh(thread, session string, maxAge time.Duration) ([]string, error) {
+	if maxAge <= 0 {
+		return s.RouteOwners(thread, session)
+	}
+	return s.routeOwners(thread, session, time.Now().Add(-maxAge))
+}
+
+func (s *Store) routeOwners(thread, session string, since time.Time) ([]string, error) {
 	owners := make([]string, 0, 2)
 	for _, key := range routeKeys(thread, session) {
 		var account string
-		err := s.db.QueryRow(`SELECT account_id FROM routes WHERE key = ?`, key).Scan(&account)
+		query := `SELECT account_id FROM routes WHERE key = ?`
+		args := []any{key}
+		if !since.IsZero() {
+			query += ` AND updated_at_ns >= ?`
+			args = append(args, encodeTime(since))
+		}
+		err := s.db.QueryRow(query, args...).Scan(&account)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}

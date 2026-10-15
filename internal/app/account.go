@@ -42,6 +42,7 @@ type Account struct {
 	rejectedAccessToken authorizationRevision
 
 	cooldown        time.Time
+	modelCooldown   map[string]time.Time
 	planType        string
 	primary         window
 	secondary       window
@@ -263,8 +264,13 @@ func (a *Account) applyPersisted(next accountState) bool {
 }
 
 type authClaims struct {
-	Email string `json:"email"`
-	Auth  struct {
+	Provider         string `json:"provider"`
+	Email            string `json:"email"`
+	AccountID        string `json:"account_id"`
+	OrganizationID   string `json:"organization_id"`
+	OrganizationName string `json:"organization_name"`
+	DeviceID         string `json:"device_id"`
+	Auth             struct {
 		AccountID               string `json:"chatgpt_account_id"`
 		Plan                    string `json:"chatgpt_plan_type"`
 		SubscriptionActiveUntil string `json:"chatgpt_subscription_active_until"`
@@ -293,6 +299,9 @@ func (a *Account) claims() authClaims {
 func claimsFromToken(token string) authClaims {
 	var c authClaims
 	jwtClaims(token, &c)
+	if c.Auth.AccountID == "" {
+		_ = json.Unmarshal([]byte(token), &c)
+	}
 	return c
 }
 
@@ -310,7 +319,19 @@ func tokenExpiry(token string) time.Time {
 func (a *Account) expires() time.Time {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return tokenExpiry(a.AccessToken)
+	if expiry := tokenExpiry(a.AccessToken); !expiry.IsZero() {
+		return expiry
+	}
+	if !strings.EqualFold(claimsFromToken(a.IDToken).Provider, "claude") {
+		return time.Time{}
+	}
+	var identity struct {
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	if json.Unmarshal([]byte(a.IDToken), &identity) != nil {
+		return time.Time{}
+	}
+	return identity.ExpiresAt
 }
 
 func (a *Account) markRejectedAccessToken(token authorizationRevision) bool {
@@ -335,7 +356,22 @@ func accessTokenDigest(token string) authorizationRevision {
 	return authorizationRevision(sha256.Sum256([]byte(token)))
 }
 
-func (a *Account) id() string    { return a.claims().Auth.AccountID }
+func (a *Account) id() string {
+	claims := a.claims()
+	if claims.Auth.AccountID != "" {
+		return claims.Auth.AccountID
+	}
+	return claims.AccountID
+}
+
+func accountIDFromToken(token string) string {
+	claims := claimsFromToken(token)
+	if claims.Auth.AccountID != "" {
+		return claims.Auth.AccountID
+	}
+	return claims.AccountID
+}
+
 func (a *Account) email() string { return a.claims().Email }
 
 func (a *Account) plan() string {
@@ -364,6 +400,15 @@ func (a *Account) refreshDue(now time.Time) bool {
 	defer a.mu.Unlock()
 	if expiry := tokenExpiry(a.AccessToken); !expiry.IsZero() {
 		return !expiry.After(now.Add(tokenRefreshLead))
+	}
+	claims := claimsFromToken(a.IDToken)
+	if strings.EqualFold(claims.Provider, "claude") {
+		var identity struct {
+			ExpiresAt time.Time `json:"expires_at"`
+		}
+		if json.Unmarshal([]byte(a.IDToken), &identity) == nil && !identity.ExpiresAt.IsZero() {
+			return !identity.ExpiresAt.After(now.Add(tokenRefreshLead))
+		}
 	}
 	return now.Sub(a.LastRefresh) > tokenRefreshFallback
 }

@@ -11,11 +11,11 @@
 <body>
 <main>
 <h1>Add an account</h1>
-<p class="lead">Copy this code, then open sign-in and paste it.</p>
-<button class="code" type="button" data-copy-code="{{.UserCode}}">
+<p class="lead">Open Claude sign-in, authorize this balancer, then return here.</p>
+{{if .UserCode}}<button class="code" type="button" data-copy-code="{{.UserCode}}">
 <span>{{.UserCode}}</span>
 <small>Click to copy</small>
-</button>
+</button>{{end}}
 <a class="sign-in" href="{{.VerificationURL}}" target="_blank" rel="noreferrer">Open sign-in</a>
 </main>
 <script src="{{dashboardAssetURL "accounts.js"}}"></script>

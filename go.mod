@@ -1,4 +1,4 @@
-module github.com/supabitapp/codex-balancer
+module github.com/supabitapp/claude-balancer
 
 go 1.26
 

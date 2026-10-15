@@ -444,7 +444,7 @@ func TestStateStoreRejectsAnotherApplication(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = openStateStore(path)
-	if err == nil || !strings.Contains(err.Error(), "not a codex-balancer") {
+	if err == nil || !strings.Contains(err.Error(), "not a claude-balancer") {
 		t.Fatalf("open error = %v, want application mismatch", err)
 	}
 }

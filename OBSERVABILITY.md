@@ -1,199 +1,109 @@
-# HTTP Responses logs and traces
+# HTTP Messages logs and traces
 
-HTTP POST at `/v1/responses`, `/codex/responses` and `/v1/codex/responses`
-emits correlated structured logs without requiring a collector. Optional
-OpenTelemetry tracing exports the same request lifecycle via OTLP HTTP.
-Observability does not select accounts, replay inference, or change
-cache/ownership policy.
+`POST /v1/messages` and its `/messages` alias emit correlated structured logs
+without requiring a collector. Optional OpenTelemetry tracing exports the same
+request lifecycle over OTLP HTTP. Observability does not select accounts, replay
+inference, or change account ownership.
 
-## Enable logs and optional tracing
+## Enable logs and tracing
 
-For JSON logs on stderr and the existing rotating log file:
+For JSON logs on stderr and the rotating log file:
 
 ```sh
-codex-balancer server -no-tui -json
+claude-balancer server -no-tui -json
 ```
 
-The server logger already enables DEBUG. HTTP records use `msg="http responses"`,
-a `stage`, and an independently generated `request_id`. The response header
-`X-Codex-Balancer-Request-Id` exposes that ID for a client bug report. INFO covers
-start, acceptance, usage, terminal and final summaries; DEBUG includes candidate
-selection, setup attempts and each valid upstream/SSE event's framing metadata.
-This is deliberately verbose while the adapter stabilizes. Plan log retention
-and disk capacity accordingly.
+HTTP records use `msg="messages request"`, a `stage`, and an independently
+generated `request_id`. The response header `X-Claude-Balancer-Request-Id`
+exposes that ID for a client bug report. INFO covers start, acceptance, usage,
+terminal, and final summaries. DEBUG includes candidate selection, setup
+attempts, and each valid upstream or SSE event's framing metadata; payloads and
+prompt text are never logged.
 
-Enable actual traces with `-otel` and an OTLP HTTP collector, for example:
+Enable actual traces with `-otel` and an OTLP HTTP collector:
 
 ```sh
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:4318"
-export OTEL_SERVICE_NAME="codex-balancer"
-codex-balancer server -no-tui -json -otel
+export OTEL_SERVICE_NAME="claude-balancer"
+claude-balancer server -no-tui -json -otel
 ```
 
 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` can instead specify the full traces URL.
-The exporter supports standard OTLP HTTP header, TLS/certificate, compression and
-protocol environment settings (`http/protobuf` by default, or `http/json`). Keep
-collector authentication in `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, not the endpoint
-URL. The endpoint must not contain user info, a query, or a fragment.
-
-Tracing is off by default even if OTEL environment variables are present. No
-collector or tracing backend is installed by the balancer. This exports traces,
-not OTLP logs or metrics: ship the JSON log file/stderr with your existing log
-collector. Existing SQLite usage accounting and `/stats` remain authoritative.
+The exporter supports the standard OTLP HTTP header, TLS/certificate,
+compression, and protocol environment settings. Keep collector credentials in
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS`, not the endpoint URL. Tracing is off by
+default even when OTLP variables are present.
 
 Sampling uses the OTel SDK's `OTEL_TRACES_SAMPLER` and
-`OTEL_TRACES_SAMPLER_ARG`. For example, after stabilization:
+`OTEL_TRACES_SAMPLER_ARG`. Unsampled requests still have trace and span IDs in
+logs; logging-only mode always has a `request_id`.
 
-```sh
-export OTEL_TRACES_SAMPLER="parentbased_traceidratio"
-export OTEL_TRACES_SAMPLER_ARG="0.1"
-```
+## Request lifecycle
 
-The default samples new traces. Unsampled requests still have trace/span IDs in
-logs; logging-only mode always has `request_id`.
-
-## What to follow
-
-Span names and `http.route` identify the actual supported path, including pi's
-Codex aliases. Arbitrary query strings are not recorded. A typical request has
-these spans:
+A normal request has spans similar to:
 
 ```text
-POST /v1/responses
+POST /v1/messages
   http.request.read
-  codex.request.translate
-  codex.response
+  claude.request.translate
+  claude.response
 ```
 
-`codex.credentials.wait` and `codex.pool_recovery` appear only when selection
-needs a credential refresh or quota recovery.
+Credential refresh and pool recovery create independent spans that can be linked
+to waiting requests. Refresh completion includes persistence, publication, and
+invalidation; it does not borrow the first request's cancellation lifetime.
 
-`codex.credentials.refresh` is an independent operation span, linked to its
-waiters. Its `codex.credentials.complete` child includes persistence/publication
-and invalidation. It does not borrow the first request's cancellation lifetime.
-Logs for shared work use `msg="credential refresh operation"` and `operation_id`;
-request `refresh_joined` records point to that operation and its trace/span IDs.
-The operation span ends before its lifecycle registration is released, so server
-shutdown joins refresh completion before flushing tracing.
-
-Useful request stages:
+Useful request stages are:
 
 | Stage | What it establishes |
 | --- | --- |
-| `admission`, `authorization`, `body_read` | Admission/authentication, content encoding, wire/decoded sizes and read latency. Rejections are logged before upstream setup. |
-| `method_not_allowed`, `rejected` | Unsupported methods on the three Responses paths, including requests rejected before admission/inference. |
-| `normalized` | Model, requested/effective tier, fast-mode policy, input/tool counts, reasoning/tool replay counts and private prefix fingerprints. |
-| `route_selected`, `routing_candidate` | Selected/prior/blocked owner, routing reason, provisional claim/join and candidate quota/priority state. Selection is not response acceptance. |
-| `handshake_started`, `handshake_finished`, `upstream_ready` | WebSocket setup latency and status before response acceptance. |
-| `turn_preflight`, `account_switch_ready`, `reconnect_decision`, `relay_close` | WebSocket account selection and reconnect decisions. |
-| `http_response_headers` | Upstream HTTP status after the POST. This does not prove that a response completed. |
-| `upstream_write_started`, `upstream_write_finished` | The transmission boundary. A failed write may still have partially transmitted the request. |
-| `response_accepted` | Ownership acceptance at `response.created`, whether SQLite persisted it, and the deduplicated `accepted_switch` flag. |
-| `first_upstream_event`, `first_delta` | First-event/delta latency; the delta type distinguishes text, reasoning and tool progress. |
-| `upstream_event`, `downstream_event` | DEBUG event type, size/index/sequence metadata; never the delta or tool arguments. |
-| `upstream_rejected`, `failure` | Upstream rejection or transport failure. The client owns retries; the balancer does not resend the POST. |
-| `usage` | Actual input, cached, cache-write, output and reasoning tokens, plus `cached_input_percent` when input usage exists. |
-| `terminal`, `cleanup`, `finished` | Terminal kind, cleanup, admission release, counts, elapsed time and cancellation state. |
+| `admission`, `authorization`, `body_read` | Authentication, content encoding, wire and decoded sizes, and read latency. |
+| `method_not_allowed`, `rejected` | Unsupported methods or requests rejected before upstream setup. |
+| `normalized` | Model, input/tool counts, stream mode, and portable-history metadata. |
+| `route_selected`, `routing_candidate` | Selected and prior owners, routing reason, provisional claim, and quota state. |
+| `handshake_started`, `handshake_finished` | Upstream setup latency and status before acceptance. |
+| `account_switch_ready`, `reconnect_decision` | Whether a replacement account can safely receive the complete request. |
+| `http_response_headers` | Upstream HTTP status after a non-streaming request. |
+| `upstream_write_started`, `upstream_write_finished` | The transmission boundary; a failed write may have partially transmitted data. |
+| `response_accepted` | Acceptance at `message_start`, persisted ownership, and any deduplicated switch. |
+| `first_upstream_event`, `first_delta` | First-event and first-token latency. |
+| `upstream_event`, `downstream_event` | Event type, size, index, and sequence metadata without payloads. |
+| `upstream_rejected`, `failure` | Upstream rejection or transport failure; the client owns replay. |
+| `usage` | Actual input, cache-read, cache-write, output, and reasoning token counts. |
+| `terminal`, `cleanup`, `finished` | Terminal kind, cleanup, admission release, counts, elapsed time, and cancellation state. |
 
-`http_status` describes the status chosen by the adapter; a successful write or
-flush is not proof the client consumed its output. Missing/incomplete usage is
-not invented. Cancellation can prevent delivery while still producing a final
-log/trace outcome.
+`http_status` is the status chosen by the adapter. A successful write or flush
+is not proof the client consumed the output. Missing or incomplete usage is not
+invented. Cancellation can prevent delivery while still producing a final
+trace outcome.
+
+## Diagnose an account switch
 
 For a client-reported request ID:
 
 ```sh
-jq 'select(.msg == "http responses" and .request_id == "REQUEST_ID")' server.log
+jq 'select(.msg == "messages request" and .request_id == "REQUEST_ID")' server.log
 ```
 
-## Diagnosing a pi fallback failure
+Read the events in this order:
 
-A sequence of `1012 upstream websocket unavailable` followed by repeated 405s
-used to mean pi had switched to HTTP on a GET-only alias. Both POST aliases now
-use the HTTP adapter and accept bounded zstd bodies, so they produce ordinary
-request logs and can continue without clearing pi's fallback state.
+1. `route_selected` identifies the established owner, if any.
+2. `account_switch_ready` records whether the complete request is portable.
+3. `response_accepted` marks the point after which replay is unsafe.
+4. `failure` and `terminal` show whether the client saw a transport or usage
+   error.
 
-Unsupported methods on these three exact paths are explicitly logged, with an
-`Allow: GET, HEAD, POST` response and a correlation ID. GET requests missing the
-WebSocket upgrade (or rejected during auth/handshake) use
-`msg="responses request rejected"`, with method, path, status and a safe reason.
-This does not add an access logger for unrelated application routes.
+An account move before `response_accepted` can be a safe bounded retry. A move
+after acceptance indicates a routing bug and should be investigated. Account
+IDs, session IDs, and agent IDs are hashed in the public dashboard; use `/admin`
+for full values.
 
-`msg="upstream websocket failure"` covers WebSocket GET clients. HTTP POST
-executions use `http_response_headers`, `upstream_rejected`, `upstream_failed`,
-and `failure`. WebSocket failure logs record the read or write phase, error class,
-close status, connection age, time since the last event, event category,
-pending and accepted turn counts, and frame sizes. Session
-and thread hashes correlate the failure with later HTTP fallback in the same
-process. Raw error text and upstream close reasons are never logged. A close
-code or elapsed time is evidence to investigate, not proof of quota exhaustion;
-this diagnostic does not initiate replay or change account selection.
+## Log inspection
 
-## Checking safe account switches and caching
+`scripts/check-logs` reads only selected metadata over SSH and never prints raw
+request or response bodies:
 
-Problem: treating a successful handshake or an uncommitted JSON response as a
-safe replay point can duplicate work and move account-bound state. Moving a
-healthy conversation to a different account also crosses its cache boundary.
-
-Read the trace as a sequence:
-
-1. `route_selected` with `routing_reason="retained"` should keep a healthy owner,
-   even when another account has more quota or manual priority.
-2. Account selection and account-bound state checks precede
-   `upstream_write_started`. Catalog changes after dispatch cannot resend a POST.
-3. Once `write_attempted=true`, do not infer replay safety merely from
-   `response_created=false` or `sse_committed=false`. The server never replays a
-   transmitted generation; retry ownership remains with the client.
-4. An HTTP usage rejection records whether `response.created` already happened
-   and identifies the client as the retry owner.
-   The client supplies full history without an old response ID or turn-state
-   token when moving accounts, analogous to resuming after a manual account
-   change. Encrypted reasoning remains in that history, not in logs.
-5. Count `response_accepted` records with `accepted_switch=true`, not handshakes
-   or speculative account choices. This preserves joined-claim deduplication.
-6. Compare successive requests' account, model, effective tier,
-   `instructions_hash`, `tools_hash` and `prompt_cache_key_hash`. Then check
-   actual cached tokens. Stable affinity/fingerprints are diagnostic clues,
-   **not proof of a cache hit**. A zero cached count is not a reason to move a
-   healthy owner automatically.
-
-A shortened illustrative trace:
-
-```text
-request A: route_selected account=pool-a reason=retained
-request A: upstream_write_started -> response_accepted accepted_switch=false
-request A: usage input_tokens=100 cached_tokens=75 cached_input_percent=75
-request B: usage rejection accepted_before_rejection=true retry_owner=client
-request B: failure -> cleanup                         # no internal replay
-request C: route_selected prior_owner=pool-a account=pool-b reason=owner_spent
-request C: upstream_write_started
-request C: response_accepted accepted_switch=true     # new owner/cache boundary
+```sh
+scripts/check-logs --host balancer --service claude-balancer.service
+scripts/check-logs --errors --since "15 minutes ago"
 ```
-
-These diagnostics help investigate title/background-model churn, changing prefix
-settings, quota recovery and real cache usage. They do not reconcile client
-model limits or promise upstream cache behavior.
-
-## Privacy and operational limits
-
-New HTTP observations use an explicit scalar metadata allowlist: no prompts,
-images, tool arguments/results, encrypted reasoning content, raw error bodies,
-API keys, OAuth tokens or arbitrary header maps. Known credentials are also
-redacted from decoded identifier/code strings before logging or span attachment.
-Session/thread/item identifiers and instruction/tool/cache-key fingerprints use
-HMAC with a random, process-local key that is never logged. Fingerprints can be
-compared within a process, not across restarts. Pool account IDs and model/tier
-names remain visible to the operator. Protect logs and the collector accordingly.
-Existing WebSocket logs remain available separately.
-
-Incoming W3C trace context is linked to a new server trace rather than controlling
-its identity or sampling. Client baggage/tracestate is not retained, and tracing
-headers are not forwarded to the Codex inference upstream. Trace/request IDs are
-never conversation affinity or authorization.
-
-Tracing uses a nonblocking batch queue (1,024 spans, batches of 128), a one-second
-batch interval, three-second export timeout and bounded span attributes/events.
-There are no per-token spans or span events beyond the first-delta marker. Queue
-pressure drops traces rather than blocking inference. Export retries are disabled;
-collector errors use sanitized diagnostics. Final export shutdown has a five-second
-budget after refresh completion. Telemetry is best effort, not accounting storage.

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	statepkg "github.com/supabitapp/codex-balancer/internal/state"
+	statepkg "github.com/supabitapp/claude-balancer/internal/state"
 )
 
 const (

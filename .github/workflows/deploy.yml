@@ -58,7 +58,7 @@ jobs:
             -o LogLevel=ERROR \
             -p "$DEPLOY_PORT" \
             -l "$DEPLOY_USER" \
-            -- "$DEPLOY_HOST" /usr/local/bin/deploy-codex-balancer \
+            -- "$DEPLOY_HOST" /usr/local/bin/deploy-claude-balancer \
             > "$ssh_dir/deploy.log" 2>&1; then
             printf '::error::Deployment failed. Inspect the server through the private SSH connection.\n'
             exit 1

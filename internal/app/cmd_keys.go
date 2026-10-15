@@ -19,9 +19,9 @@ import (
 const keysHelp = `Manage client API keys.
 
 Usage:
-  codex-balancer keys add <name>    Provision a new API key
-  codex-balancer keys list          Show provisioned API keys
-  codex-balancer keys rm <name>     Revoke an API key
+  claude-balancer keys add <name>    Provision a new API key
+  claude-balancer keys list          Show provisioned API keys
+  claude-balancer keys rm <name>     Revoke an API key
 
 Flags:
   -state string      state database (default %s)
@@ -112,15 +112,14 @@ func keyNameArg(fs *flag.FlagSet) (string, error) {
 }
 
 func generateAPIKey() (string, error) {
-	// Pi expects a JWT with an account ID. This ID is synthetic and independent
-	// of both the bearer secret and the pool's ChatGPT accounts.
+	// The account ID is synthetic and independent of the bearer secret and pool.
 	raw := make([]byte, 16+32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("generate API key: %w", err)
 	}
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := fmt.Sprintf(`{"https://api.openai.com/auth":{"chatgpt_account_id":"cb_%x"}}`, raw[:16])
-	unsigned := header + "." + base64.RawURLEncoding.EncodeToString([]byte(payload))
+	payload := fmt.Sprintf(`{"provider":"claude","account_id":"cb_%x"}`, raw[:16])
+	unsigned := header + "." + base64.RawStdEncoding.EncodeToString([]byte(payload))
 
 	// Use a disposable per-key signing secret, not a server-wide JWT secret.
 	// Authentication still requires an exact match of the entire stored key;
@@ -160,7 +159,7 @@ func listAPIKeys(store *StateStore, asJSON bool) error {
 		return encoder.Encode(out)
 	}
 	if len(keys) == 0 {
-		fmt.Println("no API keys; add one with: codex-balancer keys add <name>")
+		fmt.Println("no API keys; add one with: claude-balancer keys add <name>")
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

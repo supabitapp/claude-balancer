@@ -17,18 +17,14 @@ import (
 const accountsHelp = `Manage the account pool.
 
 Usage:
-  codex-balancer accounts add                 Sign in and add the account
-  codex-balancer accounts add --device-auth   Do the same with a code on another device
-  codex-balancer accounts list                Show pooled accounts
-  codex-balancer accounts mode <account> <mode> Set routing to normal, priority, or paused
-  codex-balancer accounts rm <email>          Drop an account
+  claude-balancer accounts add                 Sign in and add the account
+  claude-balancer accounts list                Show pooled accounts
+  claude-balancer accounts mode <account> <mode> Set routing to normal, priority, or paused
+  claude-balancer accounts rm <email>          Drop an account
 
 Flags:
   -state string      state database (default %s)
-  -device-auth       sign in with a one-time code, add only
   -json              machine-readable output, list only
-
-Self-serve Business Pro Lite can route; other Business/Enterprise workspaces are display-only.
 `
 
 func printAccountsHelp(w io.Writer) {
@@ -44,7 +40,6 @@ func accountsCmd(args []string) error {
 	fs := flag.NewFlagSet("accounts", flag.ContinueOnError)
 	fs.Usage = func() { printAccountsHelp(os.Stderr) }
 	path := fs.String("state", defaultStatePath(), "state database")
-	deviceAuth := fs.Bool("device-auth", false, "sign in with a one-time code")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -62,7 +57,7 @@ func accountsCmd(args []string) error {
 
 	switch args[0] {
 	case "add":
-		return addAccount(pool, *deviceAuth)
+		return addAccount(pool)
 	case "list":
 		return listAccounts(pool, *asJSON)
 	case "mode":
@@ -101,20 +96,15 @@ func accountsCmd(args []string) error {
 	return fmt.Errorf("unknown subcommand %q", args[0])
 }
 
-func addAccount(pool *Pool, deviceAuth bool) error {
+func addAccount(pool *Pool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	var account *Account
-	var err error
-	if deviceAuth {
-		account, err = loginWithDeviceCode(ctx, http.DefaultClient, os.Stderr, authBaseURL)
-	} else {
-		account, err = login(ctx, http.DefaultClient)
-	}
+	credentials, err := claudeLogin(ctx, http.DefaultClient, claudeOAuthPort, true)
 	if err != nil {
 		return err
 	}
+	account := accountFromClaudeCredentials(credentials)
 	if err := pool.add(account); err != nil {
 		return err
 	}
@@ -151,7 +141,7 @@ func listAccounts(pool *Pool, asJSON bool) error {
 	}
 
 	if len(accounts) == 0 {
-		fmt.Println("no accounts; add one with: codex-balancer accounts add")
+		fmt.Println("no accounts; add one with: claude-balancer accounts add")
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

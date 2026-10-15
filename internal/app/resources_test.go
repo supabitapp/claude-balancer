@@ -71,7 +71,7 @@ func TestHostResourceUsage(t *testing.T) {
 
 func BenchmarkResourceMonitorUnavailable(b *testing.B) {
 	m := newResourceMonitor()
-	m.readFile = func(string) ([]byte, error) { return os.ReadFile("/nonexistent-codex-balancer-proc/stat") }
+	m.readFile = func(string) ([]byte, error) { return os.ReadFile("/nonexistent-claude-balancer-proc/stat") }
 	now := time.Now()
 	b.ReportAllocs()
 	for b.Loop() {

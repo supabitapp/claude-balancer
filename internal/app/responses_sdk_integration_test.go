@@ -13,13 +13,13 @@ import (
 	"time"
 )
 
-// CODEX_BALANCER_TEST_SDK points to an isolated install of @ai-sdk/openai
+// CLAUDE_BALANCER_TEST_SDK points to an isolated install of @ai-sdk/openai
 // 3.0.88 (with OpenCode's existing patch), ai 6.0.168 and zod 4.1.8.
 // This exercises the actual pinned client adapter, not the OpenCode application.
 func TestHTTPResponsesPinnedSDK(t *testing.T) {
-	sdk := os.Getenv("CODEX_BALANCER_TEST_SDK")
+	sdk := os.Getenv("CLAUDE_BALANCER_TEST_SDK")
 	if sdk == "" {
-		t.Skip("set CODEX_BALANCER_TEST_SDK to an isolated pinned SDK install")
+		t.Skip("set CLAUDE_BALANCER_TEST_SDK to an isolated pinned SDK install")
 	}
 	for name, want := range map[string]string{"@ai-sdk/openai": "3.0.88", "ai": "6.0.168"} {
 		data, err := os.ReadFile(filepath.Join(sdk, "node_modules", name, "package.json"))
@@ -114,7 +114,7 @@ func TestHTTPResponsesPinnedSDK(t *testing.T) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "node", filepath.Join(dir, "smoke.mjs"))
 	cmd.Dir = dir
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "XDG_CONFIG_HOME=" + home, "XDG_DATA_HOME=" + home, "XDG_CACHE_HOME=" + home, "CODEX_BALANCER_TEST_URL=" + proxy.URL + "/v1", "CODEX_BALANCER_TEST_KEY=" + key}
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "XDG_CONFIG_HOME=" + home, "XDG_DATA_HOME=" + home, "XDG_CACHE_HOME=" + home, "CLAUDE_BALANCER_TEST_URL=" + proxy.URL + "/v1", "CLAUDE_BALANCER_TEST_KEY=" + key}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("pinned SDK: %v\n%s", err, output)

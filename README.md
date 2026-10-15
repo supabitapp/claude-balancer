@@ -1,133 +1,85 @@
-# codex-balancer
+# claude-balancer
 
-<img width="3268" height="1438" alt="CleanShot 2026-09-15 at 11 57 29@2x" src="https://github.com/user-attachments/assets/530effd5-a001-485b-bc92-23340aadfd37" />
+![Claude Balancer dashboard](https://github.com/user-attachments/assets/530effd5-a001-485b-bc92-23340aadfd37)
 
-_I wrote this README by hand, no LLM :)_
-
-Balancing usage across several ChatGPT Codex accounts.
+`claude-balancer` shares Claude usage across several authenticated accounts. It keeps account credentials in SQLite, preserves conversation affinity, and only moves a request when the current account cannot safely accept it.
 
 ## Install
 
 ```sh
-go install github.com/supabitapp/codex-balancer@latest
+go install github.com/supabitapp/claude-balancer@latest
 ```
 
-## Running the proxy
-
-```
-codex-balancer server           # serve the proxy with a TUI at
-```
-
-The server runs at http://127.0.0.1:8317
-
-- `/v1/responses` — HTTP `POST` (SSE or JSON) and WebSocket `GET`
-- `/codex/responses` and `/v1/codex/responses` — equivalent HTTP `POST` and WebSocket `GET` aliases for pi
-- `/v1/alpha/search`, `/v1/images/generations` and `/v1/images/edits` — unary `POST` proxies for Codex's standalone web search and image tools, sent with a pool account's credentials
-- `/dashboard` — HTML dashboard
-- `/stats` — JSON stats of the server, including the dashboard's estimated monthly API-price value, formatted monthly input and output token totals, and each account's reset countdown and 24-hour traffic share
-- `/accounts` — add an account. On a real server, send this to your friends so they join the pool without exposing credentials.
-
-In the TUI, press `r` to cycle an account through normal, priority, and paused routing, or space to pause/resume. The admin page's routing selector offers the same modes.
-
-## CLI
-
-There is a CLI to manage the accounts
+## Run the proxy
 
 ```sh
-codex-balancer accounts add                 # sign in through a local browser
-codex-balancer accounts list
-codex-balancer accounts mode you@example.com priority
-codex-balancer accounts mode you@example.com paused
-codex-balancer accounts mode you@example.com normal
+claude-balancer server
 ```
 
-Paused accounts stay in the pool but receive no routed requests. Existing connections restart so clients can reconnect to another account. Choose normal or priority to resume routing; space in the TUI restores the previous preference when resuming. Pauses persist across server restarts.
+The server listens on `http://127.0.0.1:8317` by default.
 
-Routing uses included quota first. When no eligible account with included quota is available, accounts whose weekly quota is exhausted can serve requests using a positive credit balance or unlimited credits. Paused accounts, accounts that need reauthentication, cooldowns, and spend/overage limits are respected. An upstream usage rejection disables that account's credit fallback until its next usage poll. Banked quota resets remain manual.
+- `/v1/messages` and `/messages` accept Anthropic Messages API `POST` requests. Streaming and non-streaming responses are supported.
+- `/v1/models` lists the models available in the account pool.
+- `/dashboard` shows redacted account health and traffic.
+- `/stats` returns JSON account and token statistics.
+- `/accounts` starts the account sign-in flow. It is safe to share this route with someone who should add an account without seeing existing credentials.
+- `/admin` is the authenticated administration dashboard.
 
-Adding an account preserves its existing model training setting.
-Self-serve Business Pro Lite
-(`self_serve_business_prolite`) accounts route using their per-account quota.
-Other Business and Enterprise workspaces are displayed but excluded from routing.
+The terminal UI and admin dashboard can set each account to `normal`, `priority`, or `paused`. A paused account receives no new requests and its existing connections are retired so that clients can reconnect elsewhere.
 
-Use the CLI to manage client API keys:
+## Manage accounts and keys
 
 ```sh
-codex-balancer keys add my-laptop
-codex-balancer keys list
-codex-balancer keys rm my-laptop
+claude-balancer accounts add
+claude-balancer accounts list
+claude-balancer accounts mode you@example.com priority
+claude-balancer accounts mode you@example.com paused
+claude-balancer accounts mode you@example.com normal
 ```
 
-`keys list` includes the input, cached, output, and total tokens attributed to
-each key.
-
-State lives in `~/.codex-balancer/state.db`.
-
-## Point Codex at it
-
-On each machine that runs Codex, export a key from the server before starting
-Codex:
+Create client keys on the server and revoke them when no longer needed:
 
 ```sh
-export CODEX_BALANCER_API_KEY="<server-key>"
+claude-balancer keys add my-laptop
+claude-balancer keys list
+claude-balancer keys rm my-laptop
 ```
 
-add that to your `~/.zshrc` or whatever env loading mechanism or shell you use.
+The database is `~/.claude-balancer/state.db` unless `-state` selects another location. Protect the database file and its backups because they contain account tokens and client key material.
 
-Then in `~/.codex/config.toml`:
+## Configure a Claude client
 
-```toml
-model_provider = "balancer"
-
-[model_providers.balancer]
-name = "OpenAI"
-base_url = "http://127.0.0.1:8317/v1"
-model_catalog_url = "http://127.0.0.1:8317/v1/models"
-env_key = "CODEX_BALANCER_API_KEY"
-requires_openai_auth = true
-supports_websockets = true
-supports_standalone_web_search = true
-```
-
-Keep `name = "OpenAI"` for server-side compaction. `model_catalog_url` lets
-Codex discover the pool's models and service tiers, including Ultrafast where
-an account supports it. `supports_standalone_web_search` advertises the
-balancer's standalone search endpoint to Codex.
-These keys are defined in [Codex 0.161.0's configuration schema](https://github.com/openai/codex/blob/rust-v0.161.0/codex-rs/core/config.schema.json).
-
-## Point pi at it
+Create a key, then point any Anthropic Messages API client at the balancer:
 
 ```sh
-export CODEX_BALANCER_API_KEY="<server-key>"
+export CLAUDE_BALANCER_API_KEY="<server-key>"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8317"
+export ANTHROPIC_API_KEY="$CLAUDE_BALANCER_API_KEY"
 ```
 
-Merge this into `~/.pi/agent/models.json`, keeping any unrelated providers:
+Requests must include the normal `anthropic-version` header. The balancer forwards the supported Claude headers and strips credentials and connection headers before sending the request to the selected account.
 
-```json
-{
-  "providers": {
-    "openai-codex": {
-      "baseUrl": "http://127.0.0.1:8317/v1",
-      "apiKey": "$CODEX_BALANCER_API_KEY"
-    }
-  }
-}
-```
+For clients that use an explicit endpoint, set the base URL to `http://127.0.0.1:8317` and send `POST /v1/messages`. The `/messages` alias is provided for clients that already append `/v1` to their configured base URL.
+
+## Routing and safe account changes
+
+Conversation-affinity headers (`X-Claude-Code-Session-Id` and `X-Claude-Code-Agent-Id`) and request metadata session identifiers keep a conversation on its established account. An established owner outranks account priority. The balancer can move a request only before a response is accepted, when the complete message history is portable, or when the upstream connection has not transmitted work. Once streaming output or account-bound state exists, the owner is retained and the client receives the upstream failure.
+
+Usage limits are handled at the account and model level. A model throttle cools down that model on the account. Claude's five-hour and seven-day limits cool down the credential across models. Authentication failures trigger a refresh; an invalid refresh token marks the account for sign-in. Invalid input, permission, and other request-scoped errors are returned to the client without rotating accounts.
 
 ## Observability
 
-HTTP Responses has verbose, request-correlated logs. Use `server -no-tui -json`
-for JSON logs; clients can report `X-Codex-Balancer-Request-Id` from response
-headers. Add `-otel` to export real traces to a configured OTLP HTTP collector:
+Use JSON logs for request-correlated diagnostics:
 
 ```sh
-OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 codex-balancer server -no-tui -json -otel
+claude-balancer server -no-tui -json
 ```
 
-See [OBSERVABILITY.md](OBSERVABILITY.md) for trace configuration, privacy/buffering
-limits, and how to check account-switch boundaries and actual cached-token usage.
-Tracing is optional and does not change routing or retry behavior.
+Responses include an `X-Claude-Balancer-Request-Id` header. OpenTelemetry is optional:
 
-## Routing
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 \
+  claude-balancer server -no-tui -json -otel
+```
 
-Routing logic is in ROUTING.md.
+See [OBSERVABILITY.md](OBSERVABILITY.md) for trace fields and account-switch diagnostics. [ROUTING.md](ROUTING.md) describes the admission, retry, cooldown, and conversation-affinity rules in detail.

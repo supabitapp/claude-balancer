@@ -46,7 +46,7 @@ func activatedListener(processID int, listenPID, listenFDs string, fd uintptr) (
 	if count != 1 {
 		return nil, false, fmt.Errorf("received %d sockets, want 1", count)
 	}
-	file := os.NewFile(fd, "codex-balancer.socket")
+	file := os.NewFile(fd, "claude-balancer.socket")
 	if file == nil {
 		return nil, false, fmt.Errorf("socket descriptor %d is invalid", fd)
 	}

@@ -1,5 +1,5 @@
 [Unit]
-Description=Codex Balancer Socket
+Description=Claude Balancer Socket
 
 [Socket]
 ListenStream=8000

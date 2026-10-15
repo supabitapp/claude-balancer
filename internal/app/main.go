@@ -7,10 +7,10 @@ import (
 	"runtime/debug"
 )
 
-const usage = `codex-balancer spreads Codex turns across several ChatGPT accounts.
+const usage = `claude-balancer spreads Claude Messages requests across several Claude accounts.
 
 Usage:
-  codex-balancer <command> [flags]
+  claude-balancer <command> [flags]
 
 Commands:
   server     Serve the balancing proxy
@@ -20,7 +20,7 @@ Commands:
   admin      Set or reset the admin password
   version    Print the version
 
-Run "codex-balancer <command> -h" for flags.
+Run "claude-balancer <command> -h" for flags.
 `
 
 // Run executes the command-line application with args.

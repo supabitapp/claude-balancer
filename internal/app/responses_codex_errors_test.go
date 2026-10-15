@@ -34,8 +34,8 @@ func TestCodexAppServerSurfacesUpstreamFailures(t *testing.T) {
 }
 
 func TestCodexAppServerRetriesHTTPCapacity(t *testing.T) {
-	if os.Getenv("CODEX_BALANCER_TEST_CODEX") == "" {
-		t.Skip("set CODEX_BALANCER_TEST_CODEX to run the app-server integration test")
+	if os.Getenv("CLAUDE_BALANCER_TEST_CODEX") == "" {
+		t.Skip("set CLAUDE_BALANCER_TEST_CODEX to run the app-server integration test")
 	}
 	for _, code := range []string{"server_is_overloaded", "slow_down"} {
 		for _, test := range []struct {
@@ -87,8 +87,8 @@ func TestCodexAppServerRetriesHTTPCapacity(t *testing.T) {
 }
 
 func TestCodexAppServerWebSocketSizeFailureFallsBackToHTTP(t *testing.T) {
-	if os.Getenv("CODEX_BALANCER_TEST_CODEX") == "" {
-		t.Skip("set CODEX_BALANCER_TEST_CODEX to run the app-server integration test")
+	if os.Getenv("CLAUDE_BALANCER_TEST_CODEX") == "" {
+		t.Skip("set CLAUDE_BALANCER_TEST_CODEX to run the app-server integration test")
 	}
 	for _, httpStatus := range []int{http.StatusOK, http.StatusRequestEntityTooLarge} {
 		t.Run(fmt.Sprint(httpStatus), func(t *testing.T) {
@@ -148,8 +148,8 @@ func TestCodexAppServerWebSocketSizeFailureFallsBackToHTTP(t *testing.T) {
 }
 
 func testCodexAppServerUpstreamFailure(t *testing.T, websockets bool, scenario string) {
-	if os.Getenv("CODEX_BALANCER_TEST_CODEX") == "" {
-		t.Skip("set CODEX_BALANCER_TEST_CODEX to run the app-server integration test")
+	if os.Getenv("CLAUDE_BALANCER_TEST_CODEX") == "" {
+		t.Skip("set CLAUDE_BALANCER_TEST_CODEX to run the app-server integration test")
 	}
 	var attempts atomic.Int64
 	if scenario == "authentication" {
@@ -244,7 +244,7 @@ func testCodexAppServerUpstreamFailure(t *testing.T, websockets bool, scenario s
 
 func runCodexErrorTurn(t *testing.T, url string, websockets bool) (map[string]any, string) {
 	t.Helper()
-	binary := os.Getenv("CODEX_BALANCER_TEST_CODEX")
+	binary := os.Getenv("CLAUDE_BALANCER_TEST_CODEX")
 	home, cwd := t.TempDir(), t.TempDir()
 	config := fmt.Sprintf(`model = "gpt-5.4"
 model_provider = "balancer"

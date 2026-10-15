@@ -1,8 +1,8 @@
 {{define "login"}}<!doctype html><html lang="en"><head>{{template "head-common"}}
-<title>Admin · Codex Balancer</title>
+<title>Admin · Claude Balancer</title>
 <link rel="stylesheet" href="{{dashboardAssetURL "admin.css"}}"></head>
 <body class="admin" hx-history="false"><main class="login">
-<p class="admin-brand"><strong>Codex Balancer</strong><span class="admin-badge">admin</span></p>
+<p class="admin-brand"><strong>Claude Balancer</strong><span class="admin-badge">admin</span></p>
 {{if .Disabled}}<p>Admin access is disabled.</p><p class="dim">Set an admin password from the server terminal to enable access.</p>
 {{else}}<p class="dim">Sign in to manage accounts, routing, and API keys.</p>
 {{if .Error}}<p class="login-error" role="alert">{{.Error}}</p>{{end}}
@@ -18,7 +18,7 @@
 {{define "csrf"}}<input type="hidden" name="csrf" value="{{.}}">{{end}}
 
 {{define "admin-header"}}<header class="admin-bar">
-<p class="admin-brand"><strong>Codex Balancer</strong><span class="admin-badge">admin</span></p>
+<p class="admin-brand"><strong>Claude Balancer</strong><span class="admin-badge">admin</span></p>
 <nav>
 <a href="/dashboard">Public dashboard</a>
 <a href="/accounts">Add account</a>

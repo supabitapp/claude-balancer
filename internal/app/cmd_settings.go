@@ -11,9 +11,9 @@ import (
 const settingsHelp = `Manage global settings.
 
 Usage:
-  codex-balancer settings set fast-mode <default|on|off>
-  codex-balancer settings get fast-mode
-  codex-balancer settings list [-json]
+  claude-balancer settings set fast-mode <default|on|off>
+  claude-balancer settings get fast-mode
+  claude-balancer settings list [-json]
 
 Fast mode: default respects the client; on forces fast; off forces standard.
 Changes restart existing WebSockets when a running server applies them.

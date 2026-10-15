@@ -14,8 +14,8 @@ import (
 const adminHelp = `Manage browser admin access.
 
 Usage:
-  codex-balancer admin password [-state path]  Set or reset the password
-  codex-balancer admin disable [-state path]   Disable admin access
+  claude-balancer admin password [-state path]  Set or reset the password
+  claude-balancer admin disable [-state path]   Disable admin access
 
 Password entry is hidden and requires a terminal. No old password is needed.
 The salted password hash is stored in the state database. Setting a new

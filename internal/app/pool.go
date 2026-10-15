@@ -80,7 +80,7 @@ func (p *Pool) find(id string) *Account {
 func (p *Pool) add(a *Account) error {
 	id := a.id()
 	if id == "" {
-		return errors.New("credentials carry no chatgpt_account_id")
+		return errors.New("credentials carry no account ID")
 	}
 	return p.mutate(func(accounts []*Account) ([]*Account, error) {
 		if i := indexOf(accounts, id); i >= 0 {
@@ -186,7 +186,7 @@ func (p *Pool) persistAccountState(state accountState) (accountState, error) {
 }
 
 func (p *Pool) persistAccountStateContext(ctx context.Context, state accountState) (accountState, error) {
-	id := claimsFromToken(state.IDToken).Auth.AccountID
+	id := accountIDFromToken(state.IDToken)
 	var persisted accountState
 	err := p.mutateContext(ctx, func(accounts []*Account) ([]*Account, error) {
 		i := indexOf(accounts, id)
@@ -293,13 +293,18 @@ func selectFreshAccount(candidates []routingCandidate, now time.Time, eligible f
 func (a *Account) routingCandidate() routingCandidate {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	claims := claimsFromToken(a.IDToken)
 	plan := a.planType
 	if plan == "" {
-		plan = claimsFromToken(a.IDToken).Auth.Plan
+		plan = claims.Auth.Plan
+	}
+	id := claims.Auth.AccountID
+	if id == "" {
+		id = claims.AccountID
 	}
 	return routingCandidate{
 		account:   a,
-		id:        claimsFromToken(a.IDToken).Auth.AccountID,
+		id:        id,
 		plan:      plan,
 		paused:    a.Paused,
 		reauth:    a.Reauth,

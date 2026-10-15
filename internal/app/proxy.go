@@ -160,6 +160,12 @@ func (s *server) routes() http.Handler {
 	)
 	mux.HandleFunc("GET /dashboard/events", s.dashboardEvents)
 	mux.HandleFunc("GET /stats", s.statsJSON)
+	claudeMessages := s.admitted(s.claudeMessagesHTTP)
+	for _, path := range []string{"/v1/messages", "/messages", "/v1/messages/count_tokens", "/messages/count_tokens"} {
+		mux.Handle("POST "+path, claudeMessages)
+		mux.Handle(path, s.observedResponses(http.HandlerFunc(s.claudeMessagesMethodNotAllowed)))
+	}
+	mux.HandleFunc("GET /v1/models", s.claudeModels)
 	// pi's Codex provider appends /codex/responses to its configured base URL.
 	responses := s.admitted(s.responsesWebSocket)
 	httpResponses := s.observedResponses(s.admitted(s.responsesHTTP))
@@ -169,7 +175,6 @@ func (s *server) routes() http.Handler {
 		mux.Handle("POST "+path, httpResponses)
 		mux.Handle(path, methodRejected)
 	}
-	mux.HandleFunc("GET /v1/models", s.models)
 	tools := s.admitted(s.proxyTool)
 	for _, path := range toolEndpoints {
 		mux.Handle("POST "+path, tools)

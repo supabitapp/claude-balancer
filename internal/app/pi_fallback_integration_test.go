@@ -21,9 +21,9 @@ import (
 // Opt-in: read-only pi checkout with installed dependencies and Node with zstd.
 // No pi application/config/auth/plugins are loaded; inference is local-only.
 func TestPiWebSocketToHTTPFallback(t *testing.T) {
-	checkout := os.Getenv("CODEX_BALANCER_TEST_PI")
+	checkout := os.Getenv("CLAUDE_BALANCER_TEST_PI")
 	if checkout == "" {
-		t.Skip("set CODEX_BALANCER_TEST_PI to a pi checkout with installed dependencies")
+		t.Skip("set CLAUDE_BALANCER_TEST_PI to a pi checkout with installed dependencies")
 	}
 	if _, err := os.Stat(filepath.Join(checkout, "packages/ai/src/api/openai-codex-responses.ts")); err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestPiWebSocketToHTTPFallback(t *testing.T) {
 			defer cancel()
 			command := exec.CommandContext(ctx, "node", filepath.Join(dir, "smoke.mjs"))
 			command.Dir = dir
-			command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "XDG_CONFIG_HOME=" + home, "XDG_DATA_HOME=" + home, "XDG_CACHE_HOME=" + home, "PI_CODING_AGENT_DIR=" + home, "CODEX_BALANCER_TEST_URL=" + proxy.URL + prefix, "CODEX_BALANCER_TEST_KEY=" + key}
+			command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "XDG_CONFIG_HOME=" + home, "XDG_DATA_HOME=" + home, "XDG_CACHE_HOME=" + home, "PI_CODING_AGENT_DIR=" + home, "CLAUDE_BALANCER_TEST_URL=" + proxy.URL + prefix, "CLAUDE_BALANCER_TEST_KEY=" + key}
 			output, err := command.CombinedOutput()
 			unblock()
 			if err != nil {

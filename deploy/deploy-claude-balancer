@@ -1,15 +1,15 @@
 #!/bin/sh
 set -eu
 
-repo=${CODEX_BALANCER_REPO:-/home/exedev/codex-balancer}
-binary=${CODEX_BALANCER_BINARY:-/usr/local/bin/codex-balancer}
-deploy_command=${CODEX_BALANCER_DEPLOY_COMMAND:-/usr/local/bin/deploy-codex-balancer}
-service=${CODEX_BALANCER_SERVICE:-codex-balancer.service}
-socket=${CODEX_BALANCER_SOCKET:-codex-balancer.socket}
-branch=${CODEX_BALANCER_BRANCH:-main}
-state_dir=${CODEX_BALANCER_STATE_DIR:-/home/exedev/.local/state/codex-balancer}
+repo=${CLAUDE_BALANCER_REPO:-/home/exedev/claude-balancer}
+binary=${CLAUDE_BALANCER_BINARY:-/usr/local/bin/claude-balancer}
+deploy_command=${CLAUDE_BALANCER_DEPLOY_COMMAND:-/usr/local/bin/deploy-claude-balancer}
+service=${CLAUDE_BALANCER_SERVICE:-claude-balancer.service}
+socket=${CLAUDE_BALANCER_SOCKET:-claude-balancer.socket}
+branch=${CLAUDE_BALANCER_BRANCH:-main}
+state_dir=${CLAUDE_BALANCER_STATE_DIR:-/home/exedev/.local/state/claude-balancer}
 state_file=$state_dir/deployed-revision
-unit_dir=${CODEX_BALANCER_UNIT_DIR:-/home/exedev/.config/systemd/user}
+unit_dir=${CLAUDE_BALANCER_UNIT_DIR:-/home/exedev/.config/systemd/user}
 
 user_id=$(id -u)
 runtime_dir=/run/user/$user_id
@@ -22,7 +22,7 @@ done
 test -d "$repo/.git"
 test -S "$runtime_dir/bus"
 
-exec 9>"$runtime_dir/codex-balancer-deploy.lock"
+exec 9>"$runtime_dir/claude-balancer-deploy.lock"
 flock 9
 
 if test -n "$(git -C "$repo" status --porcelain)"; then
@@ -49,7 +49,7 @@ deploy_tmp=
 cleanup() {
 	if test -n "$deploy_tmp"; then
 		case "$deploy_tmp" in
-			/tmp/codex-balancer-deploy.*) rm -rf -- "$deploy_tmp" ;;
+			/tmp/claude-balancer-deploy.*) rm -rf -- "$deploy_tmp" ;;
 		esac
 	fi
 }
@@ -57,14 +57,14 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
 if test "$installed_revision" != "$target_revision"; then
-	deploy_tmp=$(mktemp -d /tmp/codex-balancer-deploy.XXXXXX)
-	go -C "$repo" build -trimpath -o "$deploy_tmp/codex-balancer" .
-	built_revision=$($deploy_tmp/codex-balancer version)
+	deploy_tmp=$(mktemp -d /tmp/claude-balancer-deploy.XXXXXX)
+	go -C "$repo" build -trimpath -o "$deploy_tmp/claude-balancer" .
+	built_revision=$($deploy_tmp/claude-balancer version)
 	if test "$built_revision" != "$target_revision"; then
 		printf 'built revision %s does not match target %s\n' "$built_revision" "$target_revision" >&2
 		exit 1
 	fi
-	sudo -n install -o root -g root -m 0755 "$deploy_tmp/codex-balancer" "$binary.new"
+	sudo -n install -o root -g root -m 0755 "$deploy_tmp/claude-balancer" "$binary.new"
 	sudo -n mv -f "$binary.new" "$binary"
 	binary_changed=1
 fi
@@ -127,7 +127,7 @@ printf '%s\n' "$target_revision" >"$state_tmp"
 chmod 0600 "$state_tmp"
 mv -f "$state_tmp" "$state_file"
 
-sudo -n install -o root -g root -m 0755 "$repo/deploy/deploy-codex-balancer" "$deploy_command.new"
+sudo -n install -o root -g root -m 0755 "$repo/deploy/deploy-claude-balancer" "$deploy_command.new"
 sudo -n mv -f "$deploy_command.new" "$deploy_command"
 
 printf 'deployed %s\n' "$target_revision"

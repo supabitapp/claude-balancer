@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read codex-balancer logs over SSH; print selected metadata, never raw payloads."""
+"""Read claude-balancer logs over SSH; print selected metadata, never raw payloads."""
 
 import argparse
 import json
@@ -76,7 +76,7 @@ def stream_logs(source, args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="balancer", help="SSH host (default: %(default)s)")
-    parser.add_argument("--service", default="codex-balancer.service", help="user systemd service")
+    parser.add_argument("--service", default="claude-balancer.service", help="user systemd service")
     parser.add_argument("--since", default="30 minutes ago", help="journalctl time selector")
     parser.add_argument("-n", "--lines", type=int, default=500, help="maximum initial journal lines")
     parser.add_argument("-f", "--follow", action="store_true", help="follow new records")

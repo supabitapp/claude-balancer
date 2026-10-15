@@ -18,7 +18,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-const telemetryScope = "github.com/supabitapp/codex-balancer"
+const telemetryScope = "github.com/supabitapp/claude-balancer"
 const telemetryExportTimeout = 3 * time.Second
 const telemetryShutdownTimeout = 5 * time.Second
 
@@ -55,7 +55,7 @@ func newTelemetry(ctx context.Context, enabled bool) (*sdktrace.TracerProvider, 
 	}
 	name := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME"))
 	if name == "" {
-		name = "codex-balancer"
+		name = "claude-balancer"
 	}
 	return sdktrace.NewTracerProvider(
 		sdktrace.WithResource(resource.NewSchemaless(attribute.String("service.name", name))),

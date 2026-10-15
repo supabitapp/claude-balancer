@@ -16,29 +16,21 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/supabitapp/codex-balancer/internal/logrotate"
+	"github.com/supabitapp/claude-balancer/internal/logrotate"
 )
 
 const serverHelp = `Serve the balancing proxy.
 
 Usage:
-  codex-balancer server [flags]
+  claude-balancer server [flags]
 
-Point Codex at it by adding to ~/.codex/config.toml:
+Point a Claude Messages client at http://127.0.0.1:8317/v1/messages.
 
-  model_provider = "balancer"
-  [model_providers.balancer]
-  name = "OpenAI"
-  base_url = "http://127.0.0.1:8317/v1"
-  env_key = "CODEX_BALANCER_API_KEY"
-  requires_openai_auth = true
-  supports_websockets = true
-
-Provision a key with "codex-balancer keys add <name>", then set
-CODEX_BALANCER_API_KEY to that key before launching Codex.
+Provision a key with "claude-balancer keys add <name>", then set
+CLAUDE_BALANCER_API_KEY to that key before making requests.
 
 The server reads API keys from the state database. During an upgrade, it
-imports the deprecated -key flag or CODEX_BALANCER_API_KEY server environment
+imports the deprecated -key flag or CLAUDE_BALANCER_API_KEY server environment
 variable if the database contains no key records.
 
 Flags:
@@ -52,14 +44,14 @@ func serverCmd(args []string) (resultErr error) {
 	}
 	addr := fs.String("addr", "127.0.0.1:8317", "address to listen on")
 	path := fs.String("state", defaultStatePath(), "state database")
-	upstream := fs.String("upstream", "https://chatgpt.com/backend-api/codex", "upstream Codex base URL")
-	legacyKey := fs.String("key", os.Getenv("CODEX_BALANCER_API_KEY"), "deprecated bearer key to import into an empty state database")
+	upstream := fs.String("upstream", "https://api.anthropic.com", "upstream Claude API base URL")
+	legacyKey := fs.String("key", os.Getenv("CLAUDE_BALANCER_API_KEY"), "deprecated bearer key to import into an empty state database")
 	insecure := fs.Bool("no-auth", false, "serve without a bearer key; any local process can spend your quota")
 	jsonLogs := fs.Bool("json", false, "format logs as JSON")
 	otelTracing := fs.Bool("otel", false, "export OpenTelemetry traces using OTLP HTTP environment settings")
 	plain := fs.Bool("no-tui", false, "show logs on stderr instead of the dashboard")
 	logPath := fs.String("log-file", defaultLogPath(), "log file; empty disables file logging")
-	poll := fs.Duration("poll", 10*time.Minute, "how often to refresh account limits; 0 turns it off")
+	poll := fs.Duration("poll", 0, "reserved for account metadata refresh; 0 turns it off")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -78,7 +70,7 @@ func serverCmd(args []string) (resultErr error) {
 			return fmt.Errorf("load API keys: %w", err)
 		}
 		if count == 0 {
-			return errors.New("no active API keys; run \"codex-balancer keys add <name>\" or pass -no-auth")
+			return errors.New("no active API keys; run \"claude-balancer keys add <name>\" or pass -no-auth")
 		}
 		lookupAPIKey = store.apiKeyName
 	}
@@ -255,7 +247,7 @@ func (s *server) stopRefreshesContext(completion context.Context, cancel context
 }
 
 func defaultLogPath() string {
-	return filepath.Join(homeDir(), ".codex-balancer", "server.log")
+	return filepath.Join(homeDir(), ".claude-balancer", "server.log")
 }
 
 func newLogger(asJSON, stderr bool, path string) (*slog.Logger, io.Closer, error) {

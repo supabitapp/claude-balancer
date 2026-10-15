@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// Run with CODEX_BALANCER_TEST_CODEX=/path/to/codex. Uses an isolated home,
+// Run with CLAUDE_BALANCER_TEST_CODEX=/path/to/codex. Uses an isolated home,
 // synthetic credentials, and a local upstream; no real inference or login.
 func TestCodexAppServerUsageLimitReplaysFullHistory(t *testing.T) {
 	for _, token := range []bool{false, true} {
@@ -35,9 +35,9 @@ func testCodexReconnectReplay(t *testing.T, token bool, scenario string) {
 	httpOnly := scenario == "rate-http"
 	firstTurn := scenario == "rate-first-turn"
 	coldResume := token && scenario == "usage"
-	binary := os.Getenv("CODEX_BALANCER_TEST_CODEX")
+	binary := os.Getenv("CLAUDE_BALANCER_TEST_CODEX")
 	if binary == "" {
-		t.Skip("set CODEX_BALANCER_TEST_CODEX to run the app-server integration test")
+		t.Skip("set CLAUDE_BALANCER_TEST_CODEX to run the app-server integration test")
 	}
 	var mu sync.Mutex
 	var rejected, replay, firstReplacement map[string]any

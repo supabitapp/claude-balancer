@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	statepkg "github.com/supabitapp/codex-balancer/internal/state"
+	statepkg "github.com/supabitapp/claude-balancer/internal/state"
 )
 
 const stateApplicationID = statepkg.ApplicationID
@@ -34,7 +34,7 @@ type storedUsage struct {
 }
 
 func defaultStatePath() string {
-	return filepath.Join(homeDir(), ".codex-balancer", "state.db")
+	return filepath.Join(homeDir(), ".claude-balancer", "state.db")
 }
 
 func openStateStore(path string) (*StateStore, error) {
@@ -130,9 +130,9 @@ func accountRecord(account *Account) (statepkg.Account, error) {
 	persisted := account.accountState
 	lastUsed := account.lastUsed
 	account.mu.Unlock()
-	id := claimsFromToken(persisted.IDToken).Auth.AccountID
+	id := accountIDFromToken(persisted.IDToken)
 	if id == "" {
-		return statepkg.Account{}, errors.New("credentials carry no chatgpt_account_id")
+		return statepkg.Account{}, errors.New("credentials carry no account ID")
 	}
 	return statepkg.Account{
 		ID:           id,
@@ -189,6 +189,10 @@ func (s *StateStore) preserveRouteOwnersContext(ctx context.Context, at time.Tim
 
 func (s *StateStore) routeOwners(thread, session string) ([]string, error) {
 	return s.raw.RouteOwners(thread, session)
+}
+
+func (s *StateStore) routeOwnersFresh(thread, session string, maxAge time.Duration) ([]string, error) {
+	return s.raw.RouteOwnersFresh(thread, session, maxAge)
 }
 
 func (s *StateStore) recordUsage(event storedUsage) error {
