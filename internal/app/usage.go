@@ -20,7 +20,10 @@ const (
 )
 
 type usagePayload struct {
-	PlanType  string `json:"plan_type"`
+	PlanType  string             `json:"plan_type"`
+	FiveHour  claudeUsageWindow  `json:"five_hour"`
+	SevenDay  claudeUsageWindow  `json:"seven_day"`
+	Limits    []claudeUsageLimit `json:"limits"`
 	RateLimit struct {
 		LimitReached    *bool       `json:"limit_reached"`
 		PrimaryWindow   usageWindow `json:"primary_window"`
@@ -31,6 +34,32 @@ type usagePayload struct {
 	} `json:"rate_limit_reset_credits"`
 	SpendControl *spendControlPayload `json:"spend_control"`
 	Credits      *creditsPayload      `json:"credits"`
+}
+
+type claudeUsageWindow struct {
+	Utilization *float64   `json:"utilization"`
+	ResetsAt    *time.Time `json:"resets_at"`
+}
+
+type claudeUsageLimit struct {
+	Kind     string     `json:"kind"`
+	Percent  *float64   `json:"percent"`
+	ResetsAt *time.Time `json:"resets_at"`
+}
+
+func (u claudeUsageWindow) window(fetchedAt time.Time, minutes int) window {
+	if u.Utilization == nil {
+		return window{}
+	}
+	result := window{
+		usedPercent: *u.Utilization,
+		minutes:     minutes,
+		seenAt:      fetchedAt,
+	}
+	if u.ResetsAt != nil {
+		result.resetsAt = *u.ResetsAt
+	}
+	return result
 }
 
 type creditsPayload struct {
@@ -109,6 +138,39 @@ func (p usagePayload) bankedResets() *int64 {
 	return &p.RateLimitResetCredits.AvailableCount
 }
 
+func (p usagePayload) windows(fetchedAt time.Time) (primary, secondary window) {
+	primary = p.RateLimit.PrimaryWindow.window(fetchedAt)
+	secondary = p.RateLimit.SecondaryWindow.window(fetchedAt)
+	if direct := p.FiveHour.window(fetchedAt, 5*60); direct.known() {
+		primary = direct
+	}
+	if direct := p.SevenDay.window(fetchedAt, 7*24*60); direct.known() {
+		secondary = direct
+	}
+	for _, limit := range p.Limits {
+		minutes := 0
+		switch limit.Kind {
+		case "session":
+			minutes = 5 * 60
+		case "weekly_all":
+			minutes = 7 * 24 * 60
+		default:
+			continue
+		}
+		if limit.Percent == nil {
+			continue
+		}
+		fallback := claudeUsageWindow{Utilization: limit.Percent, ResetsAt: limit.ResetsAt}.window(fetchedAt, minutes)
+		if limit.Kind == "session" && !primary.known() {
+			primary = fallback
+		}
+		if limit.Kind == "weekly_all" && !secondary.known() {
+			secondary = fallback
+		}
+	}
+	return primary, secondary
+}
+
 type usageWindow struct {
 	UsedPercent        *float64 `json:"used_percent"`
 	ResetAt            int64    `json:"reset_at"`
@@ -174,11 +236,12 @@ func (s *server) pollUsage(ctx context.Context, account *Account) error {
 		return err
 	}
 	fetchedAt := time.Now()
+	primary, secondary := payload.windows(fetchedAt)
 	account.adopt(
 		fetchedAt,
 		payload.PlanType,
-		payload.RateLimit.PrimaryWindow.window(fetchedAt),
-		payload.RateLimit.SecondaryWindow.window(fetchedAt),
+		primary,
+		secondary,
 		payload.bankedResets(),
 		payload.SpendControl,
 		payload.Credits,
