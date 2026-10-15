@@ -521,11 +521,12 @@ func isClaudeIdentityToken(token string) bool {
 
 func claudeCredentialsFromIdentityToken(token string) claudeCredentials {
 	var identity struct {
-		AccountID        string `json:"account_id"`
-		Email            string `json:"email"`
-		OrganizationID   string `json:"organization_id"`
-		OrganizationName string `json:"organization_name"`
-		DeviceID         string `json:"device_id"`
+		AccountID        string    `json:"account_id"`
+		Email            string    `json:"email"`
+		OrganizationID   string    `json:"organization_id"`
+		OrganizationName string    `json:"organization_name"`
+		DeviceID         string    `json:"device_id"`
+		ExpiresAt        time.Time `json:"expires_at"`
 	}
 	_ = json.Unmarshal([]byte(token), &identity)
 	return claudeCredentials{
@@ -534,6 +535,7 @@ func claudeCredentialsFromIdentityToken(token string) claudeCredentials {
 		OrganizationID:   identity.OrganizationID,
 		OrganizationName: identity.OrganizationName,
 		DeviceID:         identity.DeviceID,
+		ExpiresAt:        identity.ExpiresAt,
 	}
 }
 
@@ -564,15 +566,16 @@ func randomClaudeDeviceID() (string, error) {
 
 func claudeIdentityToken(credentials claudeCredentials) string {
 	payload, _ := json.Marshal(struct {
-		Provider         string `json:"provider"`
-		AccountID        string `json:"account_id"`
-		Email            string `json:"email"`
-		OrganizationID   string `json:"organization_id"`
-		OrganizationName string `json:"organization_name"`
-		DeviceID         string `json:"device_id"`
+		Provider         string    `json:"provider"`
+		AccountID        string    `json:"account_id"`
+		Email            string    `json:"email"`
+		OrganizationID   string    `json:"organization_id"`
+		OrganizationName string    `json:"organization_name"`
+		DeviceID         string    `json:"device_id"`
+		ExpiresAt        time.Time `json:"expires_at,omitempty"`
 	}{Provider: "claude", AccountID: credentials.AccountID, Email: credentials.Email,
 		OrganizationID: credentials.OrganizationID, OrganizationName: credentials.OrganizationName,
-		DeviceID: credentials.DeviceID})
+		DeviceID: credentials.DeviceID, ExpiresAt: credentials.ExpiresAt})
 	return string(payload)
 }
 
