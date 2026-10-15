@@ -160,21 +160,21 @@ func parseModelsDevPriceCatalog(payload []byte, fetchedAt time.Time) (priceSnaps
 	if err := json.Unmarshal(payload, &providers); err != nil {
 		return priceSnapshot{}, fmt.Errorf("decode models.dev catalog: %w", err)
 	}
-	openAI := providers["openai"]
-	if len(openAI) == 0 {
-		return priceSnapshot{}, fmt.Errorf("models.dev catalog has no OpenAI provider")
+	claude := providers["anthropic"]
+	if len(claude) == 0 {
+		return priceSnapshot{}, fmt.Errorf("models.dev catalog has no Anthropic provider")
 	}
-	snapshot, err := parseOpenAIPriceCatalog(openAI, fetchedAt)
+	snapshot, err := parseClaudePriceCatalog(claude, fetchedAt)
 	if err != nil {
 		return priceSnapshot{}, err
 	}
 	return snapshot, nil
 }
 
-func parseOpenAIPriceCatalog(payload []byte, fetchedAt time.Time) (priceSnapshot, error) {
+func parseClaudePriceCatalog(payload []byte, fetchedAt time.Time) (priceSnapshot, error) {
 	var provider modelsDevProvider
 	if err := json.Unmarshal(payload, &provider); err != nil {
-		return priceSnapshot{}, fmt.Errorf("decode OpenAI prices: %w", err)
+		return priceSnapshot{}, fmt.Errorf("decode Anthropic prices: %w", err)
 	}
 	models := make(map[string]modelPrice)
 	for id, model := range provider.Models {
@@ -202,7 +202,7 @@ func parseOpenAIPriceCatalog(payload []byte, fetchedAt time.Time) (priceSnapshot
 		models[id] = modelPrice{standard: standard, modes: modes}
 	}
 	if len(models) == 0 {
-		return priceSnapshot{}, fmt.Errorf("OpenAI price catalog has no priced models")
+		return priceSnapshot{}, fmt.Errorf("Anthropic price catalog has no priced models")
 	}
 	return newPriceSnapshot(models, fetchedAt), nil
 }

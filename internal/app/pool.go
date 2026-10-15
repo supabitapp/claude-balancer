@@ -430,8 +430,8 @@ func readWindow(h http.Header, prefix string) window {
 }
 
 func (a *Account) observe(h http.Header) {
-	primary := readWindow(h, "x-codex-primary")
-	secondary := readWindow(h, "x-codex-secondary")
+	primary := readWindow(h, "anthropic-ratelimit-5h")
+	secondary := readWindow(h, "anthropic-ratelimit-7d")
 
 	a.mu.Lock()
 	defer a.mu.Unlock()

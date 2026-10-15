@@ -93,7 +93,6 @@ func newTestServer(t *testing.T, accounts []*Account) *server {
 	srv := &server{
 		ctx:      ctx,
 		pool:     pool,
-		catalog:  newModelCatalog(),
 		stats:    stats,
 		prices:   prices,
 		upstream: "http://127.0.0.1:1",
@@ -125,17 +124,6 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
-}
-
-func testModelEntry(slug string, serviceTiers ...string) modelEntry {
-	entry := modelEntry{"slug": slug}
-	if len(serviceTiers) > 0 {
-		entry["default_service_tier"] = serviceTiers[0]
-	}
-	if len(serviceTiers) > 1 {
-		entry["additional_speed_tiers"] = serviceTiers[1:]
-	}
-	return entry
 }
 
 func testAccountWithCredits(id string) *Account {

@@ -362,10 +362,6 @@ func (s *Stats) applyUsageAt(at time.Time, thread, account, model, effort, servi
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cost, known := s.prices.estimate(model, serviceTier, usage)
-	if account != "" {
-		credits, creditKnown := estimateCodexCredits(model, serviceTier, usage)
-		s.account(account).addRoutedCredits(at, credits, creditKnown)
-	}
 	if current := s.threads[thread]; current != nil && current.account == account && !at.Before(current.segmentStartedAt) {
 		current.model = model
 		if model != "" {

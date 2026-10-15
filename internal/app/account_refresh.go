@@ -95,7 +95,7 @@ func (a *Account) refreshOwned(wait context.Context, owner refreshOwner) error {
 				// phase, including persistence and unavailable-owner notification.
 				completion, stop := context.WithTimeout(completionParent, refreshCompletionTimeout)
 				completion = trace.ContextWithSpan(completion, observed.span)
-				completion, completionSpan := observed.tracer.Start(completion, "codex.credentials.complete")
+				completion, completionSpan := observed.tracer.Start(completion, "claude.credentials.complete")
 				err, completionErr = a.finishRefresh(completion, owner.persist, state, tokens, permanent, err)
 				if owner.completed != nil {
 					notifyErr := owner.completed(completion, err)

@@ -1,11 +1,8 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -18,11 +15,8 @@ import (
 )
 
 const (
-	maxWebSocketMessage  = 256 << 20
-	maxUpstreamErrorBody = 256 << 20
-	refreshTimeout       = 30 * time.Second
-	upstreamWait         = 90 * time.Second
-	websocketUpgradeWait = 10 * time.Second
+	refreshTimeout = 30 * time.Second
+	upstreamWait   = 90 * time.Second
 )
 
 func newProxyClient() *http.Client {
@@ -37,50 +31,21 @@ type server struct {
 	fastMode         fastModePolicy
 	ctx              context.Context
 	pool             *Pool
-	catalog          *modelCatalog
 	prices           *priceCatalog
 	stats            *Stats
 	logins           accountLoginStore
 	upstream         string
-	authIssuer       string
 	lookupAPIKey     func(string) (string, bool, error)
 	client           *http.Client
 	log              *slog.Logger
 	tracer           trace.Tracer
-	responseLogKeys  responseLogKeys
 	admission        *admissionGate
 	upgradeWait      time.Duration
-	catalogWait      time.Duration
 	resources        *resourceMonitor
 	countries        countryResolver
 	dashboardStreams atomic.Int64
 	dashboardUpdates dashboardBroadcaster
-	routeOwnership   contextMutex
 	refreshes        refreshOperations
-	routeClaims      routeClaimRegistry
-	activeWebSockets activeWebSocketRegistry
-}
-
-var webSocketExcludedHeaders = map[string]bool{
-	"accept-encoding":          true,
-	"authorization":            true,
-	"chatgpt-account-id":       true,
-	"connection":               true,
-	"content-length":           true,
-	"cookie":                   true,
-	"host":                     true,
-	"keep-alive":               true,
-	"proxy-authenticate":       true,
-	"proxy-authorization":      true,
-	"sec-websocket-accept":     true,
-	"sec-websocket-extensions": true,
-	"sec-websocket-key":        true,
-	"sec-websocket-protocol":   true,
-	"sec-websocket-version":    true,
-	"te":                       true,
-	"trailer":                  true,
-	"transfer-encoding":        true,
-	"upgrade":                  true,
 }
 
 func (s *server) routes() http.Handler {
@@ -163,106 +128,10 @@ func (s *server) routes() http.Handler {
 	claudeMessages := s.admitted(s.claudeMessagesHTTP)
 	for _, path := range []string{"/v1/messages", "/messages", "/v1/messages/count_tokens", "/messages/count_tokens"} {
 		mux.Handle("POST "+path, claudeMessages)
-		mux.Handle(path, s.observedResponses(http.HandlerFunc(s.claudeMessagesMethodNotAllowed)))
+		mux.Handle(path, http.HandlerFunc(s.claudeMessagesMethodNotAllowed))
 	}
 	mux.HandleFunc("GET /v1/models", s.claudeModels)
 	return mux
-}
-
-func (s *server) models(w http.ResponseWriter, r *http.Request) {
-	if _, authorized := s.authorizeAPIKey(r); !authorized {
-		writeError(w, http.StatusUnauthorized, "missing or invalid bearer key")
-		return
-	}
-	clientVersion := strings.TrimSpace(r.URL.Query().Get("client_version"))
-	if clientVersion != "" {
-		s.refreshModelsWithin(r.Context(), clientVersion)
-	}
-	models := []modelEntry{}
-	if s.catalog != nil {
-		models = s.catalog.entriesFor(clientVersion)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	if clientVersion != "" {
-		json.NewEncoder(w).Encode(map[string]any{"models": models})
-		return
-	}
-	data := make([]map[string]any, 0, len(models))
-	for _, model := range models {
-		data = append(data, map[string]any{
-			"id":       modelSlug(model),
-			"object":   "model",
-			"owned_by": "openai",
-		})
-	}
-	json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
-}
-
-func (s *server) refreshModelsWithin(requestCtx context.Context, clientVersion string) {
-	ctx := requestCtx
-	if s.ctx != nil {
-		ctx = s.ctx
-	}
-	wait := s.catalogWait
-	if wait == 0 {
-		wait = modelsResponseWait
-	}
-	done := make(chan error, 1)
-	go func() { done <- s.refreshModels(ctx, clientVersion) }()
-	select {
-	case err := <-done:
-		if err != nil && s.log != nil {
-			s.log.Warn("model refresh failed", "error", err)
-		}
-	case <-time.After(wait):
-		if s.log != nil {
-			s.log.Debug("serving cached model catalog while the refresh continues", "client_version", clientVersion, "wait", wait)
-		}
-	case <-requestCtx.Done():
-	}
-}
-
-type responseReasoning struct {
-	Effort string `json:"effort"`
-}
-
-type responseErrorPayload struct {
-	Type    string          `json:"type"`
-	Code    string          `json:"code"`
-	Message string          `json:"message,omitempty"`
-	Param   json.RawMessage `json:"param,omitempty"`
-}
-
-func responseError(resp *http.Response) responseErrorPayload {
-	original := resp.Body
-	prefix, _ := io.ReadAll(io.LimitReader(original, maxUpstreamErrorBody))
-	resp.Body = struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: io.MultiReader(bytes.NewReader(prefix), original),
-		Closer: original,
-	}
-	var envelope struct {
-		Error responseErrorPayload `json:"error"`
-	}
-	if json.Unmarshal(prefix, &envelope) != nil {
-		return responseErrorPayload{}
-	}
-	return envelope.Error
-}
-
-func responseUsageLimitReached(resp *http.Response) bool {
-	err := responseError(resp)
-	return err.Type == "usage_limit_reached" || err.Code == "usage_limit_reached" ||
-		err.Type == "credit_balance_exhausted" || err.Code == "credit_balance_exhausted"
-}
-
-func workspaceUsageLimitReached(headers http.Header) bool {
-	return strings.HasPrefix(
-		strings.ToLower(headers.Get("x-codex-rate-limit-reached-type")),
-		"workspace_",
-	)
 }
 
 func (s *server) refreshed(account *Account, id string) bool {
@@ -274,7 +143,7 @@ func (s *server) refreshed(account *Account, id string) bool {
 }
 
 func (s *server) refreshedContext(ctx context.Context, account *Account, id string) bool {
-	ctx, waitSpan := s.responseTracer().Start(ctx, "codex.credentials.wait")
+	ctx, waitSpan := s.responseTracer().Start(ctx, "claude.credentials.wait")
 	defer waitSpan.End()
 	started := time.Now()
 	observation(ctx).event(ctx, "refresh_wait_started", attribute.String("account", id))
@@ -288,19 +157,13 @@ func (s *server) refreshedContext(ctx context.Context, account *Account, id stri
 	owner := refreshOwner{
 		lifetime: lifetime, client: s.client, operations: &s.refreshes, tracer: s.responseTracer(), log: s.log,
 		persist: s.pool.persistAccountStateContext,
-		completed: func(completion context.Context, err error) error {
-			// Completion, not a surviving waiter or a later pool reload, owns
-			// this notification. No account/pool lock is held here.
-			var notifyErr error
-			if account.needsReauth() {
-				notifyErr = s.invalidateAccountContext(completion, id, routingReasonOwnerSignedOut)
-			}
-			if resultErr := errors.Join(err, notifyErr); resultErr != nil {
-				s.log.Warn("refresh failed", "account", id, "error", resultErr)
+		completed: func(_ context.Context, err error) error {
+			if err != nil {
+				s.log.Warn("refresh failed", "account", id, "error", err)
 			} else {
 				s.log.Debug("account refreshed", "account", id)
 			}
-			return notifyErr
+			return nil
 		},
 	}
 	if err := account.refreshOwned(ctx, owner); err != nil {
@@ -311,66 +174,6 @@ func (s *server) refreshedContext(ctx context.Context, account *Account, id stri
 	}
 	observation(ctx).event(ctx, "refresh_wait_finished", attribute.String("account", id), attribute.Bool("success", true), attribute.Int64("elapsed_ms", time.Since(started).Milliseconds()))
 	return true
-}
-
-func (s *server) invalidateAccount(account string, reason routingReason) {
-	_ = s.invalidateAccountContext(context.Background(), account, reason)
-}
-
-func (s *server) invalidateAccountContext(ctx context.Context, account string, reason routingReason) error {
-	if err := s.routeOwnership.LockContext(ctx); err != nil {
-		return err
-	}
-	invalidatedAt := time.Now()
-	claims := s.routeClaims.invalidateAccount(account)
-	callbacks := s.activeWebSockets.detachAccount(account)
-	var persistErr error
-	if len(claims.keys) > 0 && s.pool != nil && s.pool.store != nil {
-		persistErr = s.pool.store.preserveRouteOwnersContext(ctx, invalidatedAt, account, claims.keys)
-		if persistErr != nil {
-			s.log.Warn(
-				"provisional route owner preservation failed",
-				"account",
-				account,
-				"routing_reason",
-				reason,
-				"routes",
-				claims.keys,
-				"error",
-				persistErr,
-			)
-		}
-	}
-	s.routeOwnership.Unlock()
-	for _, closeSocket := range callbacks {
-		closeSocket(account, string(reason))
-	}
-	if claims.claims == 0 && len(callbacks) == 0 {
-		return persistErr
-	}
-	s.log.Info("account websocket routing invalidated",
-		"account", account,
-		"routing_reason", reason,
-		"provisional_claims", claims.claims,
-		"closed_websockets", len(callbacks),
-	)
-	return persistErr
-}
-
-func copyWebSocketHeaders(dst, src http.Header) {
-	connection := map[string]bool{}
-	for _, value := range src.Values("Connection") {
-		for token := range strings.SplitSeq(value, ",") {
-			connection[strings.ToLower(strings.TrimSpace(token))] = true
-		}
-	}
-	for name, values := range src {
-		lower := strings.ToLower(name)
-		if webSocketExcludedHeaders[lower] || connection[lower] {
-			continue
-		}
-		dst[name] = values
-	}
 }
 
 type apiKeyIdentity struct {

@@ -285,12 +285,12 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) claudeModels(w http.ResponseWriter, r *http.Request) {
-	if s.pool == nil {
-		s.models(w, r)
-		return
-	}
 	if _, ok := s.authorizeAPIKey(r); !ok {
 		writeError(w, http.StatusUnauthorized, "missing or invalid bearer key")
+		return
+	}
+	if s.pool == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": []any{}})
 		return
 	}
 	endpoint, err := claudeModelsURL(s.upstream)
@@ -427,12 +427,19 @@ func (s *server) selectClaudeAccountForModel(owners []string, skip map[string]bo
 		}
 	}
 	var selected *Account
+	selectedRank := 2
 	for _, account := range accounts {
 		if !eligible(account) {
 			continue
 		}
-		if selected == nil || account.routingCandidate().lastUsed.Before(selected.routingCandidate().lastUsed) {
+		candidate := account.routingCandidate()
+		rank := 1
+		if candidate.mode == routingModePriority {
+			rank = 0
+		}
+		if selected == nil || rank < selectedRank || rank == selectedRank && candidate.lastUsed.Before(selected.routingCandidate().lastUsed) {
 			selected = account
+			selectedRank = rank
 		}
 	}
 	return selected
@@ -567,7 +574,8 @@ func claudeCredentialRateLimited(headers http.Header) bool {
 		"anthropic-ratelimit-unified-5h-status",
 		"anthropic-ratelimit-unified-7d-status",
 	} {
-		if strings.EqualFold(strings.TrimSpace(headers.Get(name)), "rejected") {
+		status := strings.ToLower(strings.TrimSpace(headers.Get(name)))
+		if status != "" && status != "accepted" && status != "ok" {
 			return true
 		}
 	}

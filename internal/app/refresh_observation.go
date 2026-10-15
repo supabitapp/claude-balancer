@@ -27,7 +27,7 @@ func observeRefresh(ctx, wait context.Context, tracer trace.Tracer, log *slog.Lo
 	if link := trace.LinkFromContext(wait); link.SpanContext.IsValid() {
 		opts = append(opts, trace.WithLinks(link))
 	}
-	ctx, span := tracer.Start(ctx, "codex.credentials.refresh", opts...)
+	ctx, span := tracer.Start(ctx, "claude.credentials.refresh", opts...)
 	observer := &refreshObservation{id: rand.Text(), account: account, span: span, tracer: tracer, log: log}
 	span.SetAttributes(attribute.String("operation_id", observer.id), attribute.String("account", account))
 	return ctx, observer

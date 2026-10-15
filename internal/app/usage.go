@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-var accountAPIBaseURL = "https://chatgpt.com/backend-api/wham"
+var accountAPIBaseURL = "https://api.anthropic.com/api/oauth"
 
 const (
 	urgentUsageRefreshInterval   = 2 * time.Minute
@@ -130,7 +130,7 @@ type resetCredit struct {
 }
 
 func (c resetCredit) available() bool {
-	return c.ResetType == "codex_rate_limits" && c.Status == "available"
+	return c.ResetType == "claude_rate_limits" && c.Status == "available"
 }
 
 type consumeResetCreditRequest struct {
@@ -234,7 +234,7 @@ func (s *server) doAccountRequest(ctx context.Context, account *Account, method,
 		token := account.AccessToken
 		account.mu.Unlock()
 		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("chatgpt-account-id", account.id())
+		req.Header.Set("anthropic-account-id", account.id())
 		if len(body) > 0 {
 			req.Header.Set("Content-Type", "application/json")
 		}

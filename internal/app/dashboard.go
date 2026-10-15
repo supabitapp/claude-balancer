@@ -792,7 +792,7 @@ func dashboardMetadataInfo(metadata turnMetadata, identifier func(string) string
 		value string
 	}{
 		{"Request", metadata.RequestKind},
-		{"Codex thread", identifier(metadata.ThreadID)},
+		{"Claude thread", identifier(metadata.ThreadID)},
 		{"Turn", identifier(metadata.TurnID)},
 		{"Window", identifier(metadata.WindowID)},
 		{"Agent", metadata.SubagentKind},

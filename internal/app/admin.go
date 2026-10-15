@@ -348,12 +348,9 @@ func (s *server) adminAccountAction(w http.ResponseWriter, r *http.Request, sess
 		}
 		paused := value == "true"
 		err = s.pool.setPaused(account, paused)
-		if err == nil && paused {
-			s.invalidateAccount(account.id(), routingReasonOwnerPaused)
-		}
 		notice = "Account resumed."
 		if paused {
-			notice = "Account paused. Existing connections are reconnecting."
+			notice = "Account paused. New requests will use another account."
 		}
 	case "mode":
 		mode := routingMode(r.PostForm.Get("mode"))
@@ -364,14 +361,11 @@ func (s *server) adminAccountAction(w http.ResponseWriter, r *http.Request, sess
 		err = s.pool.setRoutingMode(account, mode)
 		notice = "Routing preference saved."
 		if err == nil && mode == routingModePaused {
-			s.invalidateAccount(account.id(), routingReasonOwnerPaused)
-			notice = "Account paused. Existing connections are reconnecting."
+			notice = "Account paused. New requests will use another account."
 		}
 	case "remove":
 		err = s.pool.remove(account)
 		if err == nil {
-			s.invalidateAccount(account.id(), routingReasonOwnerRemoved)
-			s.catalog.invalidate()
 		}
 		notice = "Account removed."
 	}
@@ -435,12 +429,19 @@ func (s *server) adminKeyAction(w http.ResponseWriter, r *http.Request, session 
 func (s *server) adminRefreshAccount(w http.ResponseWriter, r *http.Request, session adminSession, account *Account) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	usageErr := s.pollUsage(ctx, account)
-	creditsErr := s.pollResetCredits(ctx, account)
-	notice, status := "Quota and banked credits refreshed for "+label(account)+".", http.StatusOK
-	if usageErr != nil || creditsErr != nil {
-		s.log.Warn("admin account refresh failed", "account", account.id(), "usage_error", usageErr, "credits_error", creditsErr)
-		notice, status = "Could not refresh all account data. Try again.", http.StatusBadGateway
+	client := s.client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	var persist func(accountState) (accountState, error)
+	if s.pool != nil && s.pool.store != nil {
+		persist = s.pool.persistAccountState
+	}
+	err := account.refresh(ctx, client, persist)
+	notice, status := "Claude credentials refreshed for "+label(account)+".", http.StatusOK
+	if err != nil {
+		s.log.Warn("admin account refresh failed", "account", account.id(), "error", err)
+		notice, status = "Could not refresh Claude credentials. Try again.", http.StatusBadGateway
 	}
 	s.stats.note("admin account refresh", account.id(), notice)
 	s.renderAdmin(w, r, session, notice, "", status)
@@ -484,11 +485,6 @@ func (s *server) adminBankedReset(w http.ResponseWriter, r *http.Request, sessio
 		case <-timer.C:
 		case <-ctx.Done():
 		}
-	}
-	usageErr := s.pollUsage(ctx, account)
-	creditsErr := s.pollResetCredits(ctx, account)
-	if usageErr != nil || creditsErr != nil {
-		notice += " Could not refresh account data; it will update on the next successful poll."
 	}
 	s.renderAdmin(w, r, session, notice, "", status)
 }

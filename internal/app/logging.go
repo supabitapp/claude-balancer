@@ -123,16 +123,11 @@ func routingDecisionReason(decision routingDecision, allowed map[string]bool, sk
 	}
 }
 
-func (s *server) allowedAccounts(model, serviceTier string) map[string]bool {
-	if s.catalog == nil {
-		return nil
-	}
-	return s.catalog.allowedAccounts(s.pool.all(), model, serviceTier)
-}
-
 func accountAllowed(allowed map[string]bool, id string) bool {
 	return allowed == nil || allowed[id]
 }
+
+func (s *server) allowedAccounts(string, string) map[string]bool { return nil }
 
 func routingLogAttrs(candidate routingCandidate, now time.Time) []any {
 	status := candidate.status(now)

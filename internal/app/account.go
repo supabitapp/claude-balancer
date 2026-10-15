@@ -17,12 +17,11 @@ import (
 )
 
 const (
-	oauthClientID        = "app_EMoamEEZ73f0CkXaXp7hrann"
 	tokenRefreshFallback = 8 * 24 * time.Hour
 	tokenRefreshLead     = 5 * time.Minute
 )
 
-var oauthEndpoint = authBaseURL + "/oauth/token"
+var oauthEndpoint = claudeOAuthTokenURL
 
 type accountState struct {
 	IDToken      string
@@ -271,11 +270,11 @@ type authClaims struct {
 	OrganizationName string `json:"organization_name"`
 	DeviceID         string `json:"device_id"`
 	Auth             struct {
-		AccountID               string `json:"chatgpt_account_id"`
-		Plan                    string `json:"chatgpt_plan_type"`
-		SubscriptionActiveUntil string `json:"chatgpt_subscription_active_until"`
-		SubscriptionLastChecked string `json:"chatgpt_subscription_last_checked"`
-	} `json:"https://api.openai.com/auth"`
+		AccountID               string `json:"account_id"`
+		Plan                    string `json:"plan"`
+		SubscriptionActiveUntil string `json:"subscription_active_until"`
+		SubscriptionLastChecked string `json:"subscription_last_checked"`
+	} `json:"auth"`
 }
 
 func jwtClaims(token string, into any) {
@@ -299,8 +298,14 @@ func (a *Account) claims() authClaims {
 func claimsFromToken(token string) authClaims {
 	var c authClaims
 	jwtClaims(token, &c)
-	if c.Auth.AccountID == "" {
+	if c.AccountID == "" && c.Auth.AccountID == "" {
 		_ = json.Unmarshal([]byte(token), &c)
+	}
+	if c.Auth.AccountID == "" {
+		c.Auth.AccountID = c.AccountID
+	}
+	if c.Auth.Plan == "" && c.Provider != "" {
+		c.Auth.Plan = c.Provider
 	}
 	return c
 }
@@ -490,7 +495,7 @@ func (a *Account) finishRefresh(ctx context.Context, persist func(context.Contex
 func exchangeRefreshToken(ctx context.Context, hc *http.Client, token string) (tokenResponse, bool, error) {
 	var out tokenResponse
 	body, err := json.Marshal(refreshRequest{
-		ClientID:     oauthClientID,
+		ClientID:     claudeOAuthClientID,
 		GrantType:    "refresh_token",
 		RefreshToken: token,
 	})

@@ -14,6 +14,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -158,6 +160,21 @@ func claudeLogin(ctx context.Context, hc *http.Client, port int, open bool) (*cl
 		openBrowser(link)
 	}
 	return flow.wait(ctx)
+}
+
+func openBrowser(target string) {
+	command, args := "", []string(nil)
+	switch runtime.GOOS {
+	case "darwin":
+		command, args = "open", []string{target}
+	case "windows":
+		command, args = "rundll32", []string{"url.dll,FileProtocolHandler", target}
+	default:
+		command, args = "xdg-open", []string{target}
+	}
+	if command != "" {
+		_ = exec.Command(command, args...).Start()
+	}
 }
 
 func startClaudeLogin(hc *http.Client, port int) (*claudeOAuthFlow, string, error) {

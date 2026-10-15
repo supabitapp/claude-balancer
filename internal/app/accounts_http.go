@@ -10,8 +10,9 @@ import (
 	"time"
 )
 
+const accountLoginTimeout = 15 * time.Minute
+
 type accountLogin struct {
-	device          deviceAuthorization
 	expiresAt       time.Time
 	claudeFlow      *claudeOAuthFlow
 	verificationURL string
@@ -21,25 +22,6 @@ type accountLoginStore struct {
 	mu        sync.Mutex
 	active    *accountLogin
 	completed bool
-}
-
-func (s *accountLoginStore) getOrCreate(create func() (deviceAuthorization, error)) (accountLogin, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.active != nil {
-		return *s.active, false, nil
-	}
-	device, err := create()
-	if err != nil {
-		return accountLogin{}, false, err
-	}
-	login := accountLogin{
-		device:    device,
-		expiresAt: time.Now().Add(deviceAuthTimeout),
-	}
-	s.active = &login
-	s.completed = false
-	return login, true, nil
 }
 
 func (s *accountLoginStore) getOrCreateClaude(create func() (*claudeOAuthFlow, string, error)) (accountLogin, bool, error) {
@@ -52,27 +34,10 @@ func (s *accountLoginStore) getOrCreateClaude(create func() (*claudeOAuthFlow, s
 	if err != nil {
 		return accountLogin{}, false, err
 	}
-	login := accountLogin{claudeFlow: flow, verificationURL: link, expiresAt: time.Now().Add(deviceAuthTimeout)}
+	login := accountLogin{claudeFlow: flow, verificationURL: link, expiresAt: time.Now().Add(accountLoginTimeout)}
 	s.active = &login
 	s.completed = false
 	return login, true, nil
-}
-
-func (s *accountLoginStore) release(authID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.active != nil && s.active.device.authID == authID {
-		s.active = nil
-	}
-}
-
-func (s *accountLoginStore) finish(authID string, completed bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.active != nil && s.active.device.authID == authID {
-		s.active = nil
-		s.completed = completed
-	}
 }
 
 func (s *accountLoginStore) finishClaude(flow *claudeOAuthFlow, completed bool) {
@@ -111,12 +76,8 @@ func (s *server) accountsPage(w http.ResponseWriter, r *http.Request) {
 		UserCode:        "",
 	}); err != nil {
 		if created {
-			if login.claudeFlow != nil {
-				login.claudeFlow.stop()
-				s.logins.finishClaude(login.claudeFlow, false)
-			} else {
-				s.logins.release(login.device.authID)
-			}
+			login.claudeFlow.stop()
+			s.logins.finishClaude(login.claudeFlow, false)
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -141,7 +102,7 @@ func (s *server) completeClaudeAccountLogin(ctx context.Context, flow *claudeOAu
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, deviceAuthTimeout)
+	ctx, cancel := context.WithTimeout(ctx, accountLoginTimeout)
 	defer cancel()
 	credentials, err := flow.wait(ctx)
 	flow.stop()
@@ -183,25 +144,4 @@ func minutesUntil(now, deadline time.Time) int {
 		return 0
 	}
 	return int((remaining + time.Minute - 1) / time.Minute)
-}
-
-func (s *server) completeAccountLogin(ctx context.Context, issuer string, device deviceAuthorization) {
-	account, err := completeDeviceAuthorization(ctx, s.client, issuer, device)
-	if err == nil {
-		err = s.pool.add(account)
-	}
-	if err != nil {
-		s.logins.finish(device.authID, false)
-		s.stats.note("account login failed", "", err.Error())
-		return
-	}
-	s.logins.finish(device.authID, true)
-	s.stats.note("account added", account.id(), "")
-}
-
-func (s *server) accountAuthIssuer() string {
-	if s.authIssuer == "" {
-		return authBaseURL
-	}
-	return s.authIssuer
 }

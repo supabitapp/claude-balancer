@@ -51,7 +51,6 @@ func serverCmd(args []string) (resultErr error) {
 	otelTracing := fs.Bool("otel", false, "export OpenTelemetry traces using OTLP HTTP environment settings")
 	plain := fs.Bool("no-tui", false, "show logs on stderr instead of the dashboard")
 	logPath := fs.String("log-file", defaultLogPath(), "log file; empty disables file logging")
-	poll := fs.Duration("poll", 0, "reserved for account metadata refresh; 0 turns it off")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -93,7 +92,6 @@ func serverCmd(args []string) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("load dashboard state: %w", err)
 	}
-	catalog := newModelCatalog()
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -114,7 +112,6 @@ func serverCmd(args []string) (resultErr error) {
 	srv := &server{
 		ctx:          ctx,
 		pool:         pool,
-		catalog:      catalog,
 		prices:       prices,
 		stats:        stats,
 		upstream:     *upstream,
@@ -127,7 +124,7 @@ func serverCmd(args []string) (resultErr error) {
 	if telemetry != nil {
 		srv.tracer = telemetry.Tracer(telemetryScope)
 	}
-	log.Info("HTTP Responses observability configured", "structured_request_logs", true, "otel_enabled", telemetry != nil)
+	log.Info("Claude Messages observability configured", "structured_request_logs", true, "otel_enabled", telemetry != nil)
 	// This defer also runs before telemetry shutdown, so late shared refresh
 	// completion spans are ended before the exporter is flushed.
 	// Every exit path must join refresh publication before deferred store.Close.
@@ -135,24 +132,10 @@ func serverCmd(args []string) (resultErr error) {
 	if err := srv.reloadSettings(); err != nil {
 		return fmt.Errorf("load settings: %w", err)
 	}
-	if version, err := store.raw.ModelsClientVersion(); err != nil {
-		return fmt.Errorf("load model client version: %w", err)
-	} else if version != "" {
-		catalog.seed(version)
-	}
 	go srv.watchSettings(ctx)
 	pool.watch(ctx, func(change poolChange) {
 		log.Info("accounts updated", "added", change.added, "removed", change.removed, "updated", change.updated)
 		stats.note("accounts updated", "", fmt.Sprintf("%d added, %d removed, %d updated", change.added, change.removed, change.updated))
-		for _, account := range change.unavailable {
-			srv.invalidateAccount(account.id, account.reason)
-		}
-		srv.catalog.invalidate()
-		go func() {
-			if err := srv.refreshModels(ctx, srv.catalog.version()); err != nil && ctx.Err() == nil {
-				log.Warn("model refresh failed", "error", err)
-			}
-		}()
 	}, func(err error) {
 		log.Warn("account watch failed", "error", err)
 		stats.note("account watch failed", "", err.Error())
@@ -184,12 +167,6 @@ func serverCmd(args []string) (resultErr error) {
 	}
 	defer listener.Close()
 
-	log.Info("loading initial account quotas", "accounts", pool.count())
-	srv.pollAllUsage(ctx)
-	log.Info("initial account quota refresh complete", "accounts", pool.count())
-
-	go srv.watchUsage(ctx, *poll)
-	go srv.watchModels(ctx)
 	go srv.watchPriceCatalog(ctx)
 
 	serving := make(chan error, 1)

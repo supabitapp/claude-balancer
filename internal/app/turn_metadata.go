@@ -3,8 +3,8 @@ package app
 import "encoding/json"
 
 const (
-	codexTurnMetadataKey = "x-codex-turn-metadata"
-	codexTurnStateKey    = "x-codex-turn-state"
+	claudeTurnMetadataKey = "x-claude-turn-metadata"
+	claudeTurnStateKey    = "x-claude-turn-state"
 )
 
 type turnMetadata struct {
@@ -26,7 +26,7 @@ type compactionMetadata struct {
 }
 
 func requestTurnMetadata(header string, clientMetadata map[string]string) turnMetadata {
-	value := clientMetadata[codexTurnMetadataKey]
+	value := clientMetadata[claudeTurnMetadataKey]
 	if header != "" {
 		value = header
 	}

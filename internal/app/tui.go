@@ -107,9 +107,6 @@ func (d dashboard) toggle() {
 	kind := "resumed"
 	if paused {
 		kind = "paused"
-		if d.server != nil {
-			d.server.invalidateAccount(account.id(), routingReasonOwnerPaused)
-		}
 	}
 	d.stats.note(kind, account.id(), "")
 }
@@ -124,9 +121,6 @@ func (d dashboard) cycleRoutingMode() {
 	if err != nil {
 		d.stats.note("save failed", account.id(), err.Error())
 		return
-	}
-	if mode == routingModePaused && d.server != nil {
-		d.server.invalidateAccount(account.id(), routingReasonOwnerPaused)
 	}
 	d.stats.note("routing mode", account.id(), string(mode))
 }
@@ -240,7 +234,7 @@ func (d dashboard) header() string {
 		parts = append(parts, styles.bad.Render(fmt.Sprintf("%d need reauth", dead)))
 	}
 
-	left := styles.title.Render("CODEX BALANCER") + styles.dim.Render("   "+strings.Join(parts, styles.dim.Render(" · ")))
+	left := styles.title.Render("CLAUDE BALANCER") + styles.dim.Render("   "+strings.Join(parts, styles.dim.Render(" · ")))
 	right := styles.dim.Render(fmt.Sprintf("%s · %s · up %s · q quits", d.addr, rate(d.snap), short(d.snap.Uptime)))
 	gap := max(d.width-6-lipgloss.Width(left)-lipgloss.Width(right), 1)
 	return styles.panel.Width(d.width).Render(left + strings.Repeat(" ", gap) + right)
