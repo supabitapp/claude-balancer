@@ -1078,17 +1078,20 @@ func claudeRateLimitReset(h http.Header, now time.Time) time.Time {
 			latest = reset
 		}
 	}
-	if retryAfter := claudeRetryAfterHeader(h, now); retryAfter.After(now) {
-		latest = retryAfter
+	for _, prefix := range []string{"anthropic-ratelimit-unified-5h", "anthropic-ratelimit-unified-7d"} {
+		utilization, err := strconv.ParseFloat(claudeHeaderValue(h, prefix+"-utilization"), 64)
+		exhausted := err == nil && utilization >= 1 && !math.IsInf(utilization, 0)
+		if !claudeStatusRejected(claudeHeaderValue(h, prefix+"-status")) && !exhausted {
+			continue
+		}
+		consider(claudeHeaderValue(h, prefix+"-reset"))
+		consider(claudeHeaderValue(h, prefix+"-reset-at"))
 	}
-	for _, name := range []string{
-		"anthropic-ratelimit-unified-reset",
-		"anthropic-ratelimit-unified-5h-reset",
-		"anthropic-ratelimit-unified-5h-reset-at",
-		"anthropic-ratelimit-unified-7d-reset",
-		"anthropic-ratelimit-unified-7d-reset-at",
-	} {
-		consider(claudeHeaderValue(h, name))
+	if latest.IsZero() {
+		consider(claudeHeaderValue(h, "anthropic-ratelimit-unified-reset"))
+	}
+	if retryAfter := claudeRetryAfterHeader(h, now); retryAfter.After(now) && retryAfter.After(latest) {
+		latest = retryAfter
 	}
 	max := now.Add(7*24*time.Hour + time.Hour)
 	if latest.After(max) {
