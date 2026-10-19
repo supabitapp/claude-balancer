@@ -243,6 +243,22 @@ func TestServerRefreshPersistsRotatedTokenForRestart(t *testing.T) {
 	}
 }
 
+func TestServerRefreshDoesNotReportAccountUpdateOnReload(t *testing.T) {
+	useOAuthRefreshServer(t)
+	server := newTestServer(t, []*Account{testAccount("account-a", 10)})
+	account := server.pool.find("account-a")
+	if !server.refreshed(account, account.id()) {
+		t.Fatal("refresh failed")
+	}
+	change, err := server.pool.reload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if change.changed() {
+		t.Fatalf("reload after refresh reported a change: %+v", change)
+	}
+}
+
 func TestServerRefreshFailsWhenRotatedTokenCannotPersist(t *testing.T) {
 	useOAuthRefreshServer(t)
 	account := testAccount("account-a", 10)

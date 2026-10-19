@@ -266,6 +266,9 @@ func (a *Account) applyPersisted(next accountState) bool {
 	}
 	a.Paused = next.Paused
 	a.RoutingMode = next.RoutingMode.normalized()
+	if a.LastRefresh.Equal(before.LastRefresh) {
+		before.LastRefresh = a.LastRefresh
+	}
 	return a.accountState != before
 }
 
