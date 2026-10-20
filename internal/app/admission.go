@@ -17,12 +17,13 @@ type admissionGate struct {
 	limit    int
 	draining bool
 	idle     chan struct{}
+	drained  chan struct{}
 }
 
 func newAdmissionGate(limit int) *admissionGate {
 	idle := make(chan struct{})
 	close(idle)
-	return &admissionGate{limit: limit, idle: idle}
+	return &admissionGate{limit: limit, idle: idle, drained: make(chan struct{})}
 }
 
 func (g *admissionGate) acquire() bool {
@@ -49,8 +50,15 @@ func (g *admissionGate) release() {
 
 func (g *admissionGate) beginDrain() {
 	g.mu.Lock()
+	if !g.draining {
+		close(g.drained)
+	}
 	g.draining = true
 	g.mu.Unlock()
+}
+
+func (g *admissionGate) drainStarted() <-chan struct{} {
+	return g.drained
 }
 
 func (g *admissionGate) wait(ctx context.Context) error {

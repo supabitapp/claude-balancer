@@ -10,7 +10,8 @@ HTMX and keeps the existing visual style.
 
 The proxy preserves conversation affinity and only retries a request while the
 upstream work is still safe to replay. It supports streaming and non-streaming
-Messages API requests, count-tokens requests, and model discovery.
+Messages API requests, count-tokens requests, model discovery, and
+speech-to-text dictation.
 
 ## Install
 
@@ -77,6 +78,7 @@ already includes `/v1`.
 | `/messages` | Messages API alias | Client API key |
 | `/v1/messages/count_tokens` | Claude count-tokens API | Client API key |
 | `/v1/models` | Models available through the account pool | Client API key |
+| `/api/ws/speech_to_text/voice_stream` | Claude speech-to-text WebSocket relay | Client API key |
 | `/stats` | JSON account and token statistics | None |
 
 The root path redirects to `/dashboard`. Set or reset the admin password with:
@@ -143,6 +145,25 @@ Retries are limited to failures that are safe to replay:
 
 Read [ROUTING.md](ROUTING.md) for the complete admission, cooldown, retry, and
 conversation-affinity rules.
+
+## Speech to text
+
+`GET /api/ws/speech_to_text/voice_stream` relays Claude's dictation WebSocket
+through a pool account. It uses the same path as Anthropic, so a client changes
+only the host and sends the balancer key instead of a claude.ai token:
+
+```text
+wss://<balancer>/api/ws/speech_to_text/voice_stream?encoding=linear16&sample_rate=16000&channels=1&endpointing_ms=300&utterance_end_ms=1000&language=en&use_conversation_engine=true
+Authorization: Bearer <server-key>
+x-config-keyterms: Supaterm,Tailscale
+```
+
+The client sends raw PCM16 little-endian 16 kHz mono audio as binary frames,
+plus `{"type":"KeepAlive"}` and `{"type":"CloseStream"}` text frames. The server
+returns `TranscriptText` frames with the cumulative transcript, followed by
+`TranscriptEndpoint`. Frames are relayed unchanged in both directions. Keep each
+frame at or below 1 MiB. A session ends after six minutes, or after 30 seconds
+without a frame in either direction.
 
 ## Observability
 
