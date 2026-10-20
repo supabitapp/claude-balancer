@@ -103,6 +103,49 @@ the output. Logs distinguish upstream acceptance, downstream writes, and final
 completion. Usage is recorded only when the upstream provides it; missing or
 partial usage is not invented.
 
+## Speech to text
+
+`GET /api/ws/speech_to_text/voice_stream` is a WebSocket relay to Claude's
+speech-to-text service. It authenticates with the client API key, then picks an
+account with fresh placement. Dictation sessions are short and stateless, so
+there is no conversation affinity. The balancer refreshes the account's
+claude.ai OAuth token first if it is near expiry. It then opens the upstream
+socket before it upgrades the client.
+
+The upstream URL keeps only the `encoding`, `sample_rate`, `channels`,
+`endpointing_ms`, `utterance_end_ms`, `language`, `use_conversation_engine`, and
+`forward_interims` query parameters. The upstream request carries the account's
+`Authorization` header plus the client's `User-Agent`, `x-app`,
+`anthropic-client-platform`, and `x-config-keyterms` headers. Nothing else is
+forwarded. The balancer rejects `x-config-keyterms` with `400` unless it is
+printable ASCII of at most 1024 characters and 50 terms.
+
+Because the client has not been upgraded yet, a rejected upstream handshake can
+move to another account:
+
+- A `401` refreshes the account once and retries the same account. If it is
+  rejected again, the next account is tried.
+- A `429` moves to the next account. A credential-wide five-hour or seven-day
+  rejection also cools the account down, as it does for Messages.
+- Any other rejection, and the last rejection after three accounts, is returned
+  to the client as an HTTP response with the upstream status and body.
+
+Once the client is upgraded, the account is fixed for the session and there is
+no failover. Frames pass through unchanged in both directions, and each side's
+close code and reason are forwarded to the other side. When the balancer ends a
+session itself, it uses these close codes:
+
+| Code | Reason |
+| --- | --- |
+| `1014` | upstream connection lost |
+| `1009` | a frame exceeded 1 MiB |
+| `1008` | speech session time limit reached (six minutes) |
+| `1008` | speech session idle timeout (30 seconds without a frame) |
+| `1012` | balancer shutting down |
+
+Logs record the account, API key name, close side, close code, duration, and
+byte counts. They never contain audio or transcript text.
+
 ## Administration
 
 Changing an account to `paused` retires its active streams and prevents new

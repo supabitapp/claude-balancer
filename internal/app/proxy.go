@@ -133,6 +133,7 @@ func (s *server) routes() http.Handler {
 		mux.Handle(path, http.HandlerFunc(s.claudeMessagesMethodNotAllowed))
 	}
 	mux.HandleFunc("GET /v1/models", s.claudeModels)
+	mux.Handle("GET "+claudeSpeechPath, s.admitted(s.claudeSpeechHTTP))
 	return mux
 }
 
