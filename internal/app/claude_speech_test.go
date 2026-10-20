@@ -110,8 +110,9 @@ func receive[T any](t *testing.T, values <-chan T) T {
 		return value
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for speech relay")
-		panic("unreachable")
 	}
+	var zero T
+	return zero
 }
 
 func TestClaudeSpeechRequiresAPIKey(t *testing.T) {

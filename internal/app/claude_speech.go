@@ -85,7 +85,8 @@ func (s *server) claudeSpeechHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.ctx != nil {
 		shutdown = s.ctx.Done()
 	}
-	s.log.Info("speech session opened", "account", id, "api_key", apiKey.name)
+	log := s.log.With("account", id, "api_key", apiKey.name)
+	log.Info("speech session opened")
 	started := time.Now()
 	relay := &claudeSpeechRelay{
 		client:      client,
@@ -94,9 +95,7 @@ func (s *server) claudeSpeechHTTP(w http.ResponseWriter, r *http.Request) {
 		maxSession:  claudeSpeechMaxSession,
 	}
 	relay.run(shutdown)
-	s.log.Info("speech session closed",
-		"account", id,
-		"api_key", apiKey.name,
+	log.Info("speech session closed",
 		"closed_by", relay.closedBy,
 		"close_status", int(relay.closeStatus),
 		"duration_ms", time.Since(started).Milliseconds(),
@@ -130,13 +129,14 @@ func (s *server) dialClaudeSpeech(ctx context.Context, endpoint string, inbound 
 		s.log.Warn("speech upstream rejected", "account", id, "attempt", attempt+1, "status", response.StatusCode)
 		switch response.StatusCode {
 		case http.StatusUnauthorized:
+			continue
 		case http.StatusTooManyRequests:
 			if claudeCredentialRateLimited(response.Header) {
 				account.rateLimitedClaude(response.Header)
 			}
-		default:
-			return nil, nil, rejection, nil
+			continue
 		}
+		return nil, nil, rejection, nil
 	}
 	return nil, nil, rejection, nil
 }
@@ -193,7 +193,7 @@ func claudeSpeechHeaders(inbound http.Header, accessToken string) http.Header {
 }
 
 func validClaudeSpeechKeyterms(value string) bool {
-	if len(value) > claudeSpeechMaxKeyterms || strings.Count(value, ",") >= claudeSpeechMaxTerms {
+	if len(value) > claudeSpeechMaxKeyterms || strings.Count(value, ",")+1 > claudeSpeechMaxTerms {
 		return false
 	}
 	for i := range len(value) {
