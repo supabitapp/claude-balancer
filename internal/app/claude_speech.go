@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -82,8 +81,8 @@ func (s *server) claudeSpeechHTTP(w http.ResponseWriter, r *http.Request) {
 		defer s.stats.websocketClosed(id)
 	}
 	var shutdown <-chan struct{}
-	if s.ctx != nil {
-		shutdown = s.ctx.Done()
+	if s.admission != nil {
+		shutdown = s.admission.drainStarted()
 	}
 	log := s.log.With("account", id, "api_key", apiKey.name)
 	log.Info("speech session opened")
@@ -216,10 +215,10 @@ func headerHasToken(headers http.Header, name, target string) bool {
 }
 
 func writeClaudeSpeechRejection(w http.ResponseWriter, response *http.Response) {
-	defer response.Body.Close()
-	copyClaudeResponseHeaders(w.Header(), response.Header)
-	w.WriteHeader(response.StatusCode)
-	_, _ = io.Copy(w, response.Body)
+	if retryAfter := response.Header.Get("Retry-After"); retryAfter != "" {
+		w.Header().Set("Retry-After", retryAfter)
+	}
+	writeError(w, response.StatusCode, "Claude speech upstream rejected the connection")
 }
 
 // claudeSpeechRelay copies frames unchanged in both directions. Only the side
@@ -298,6 +297,9 @@ func (r *claudeSpeechRelay) finish(closedBy string, status websocket.StatusCode,
 }
 
 func claudeSpeechCloseStatus(err error, fallback websocket.StatusCode, reason string) (websocket.StatusCode, string) {
+	if errors.Is(err, websocket.ErrMessageTooBig) {
+		return websocket.StatusMessageTooBig, "speech frame exceeded 1 MiB"
+	}
 	var closed websocket.CloseError
 	if !errors.As(err, &closed) {
 		return fallback, reason

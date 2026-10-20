@@ -3,8 +3,8 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -54,14 +54,15 @@ func speechUpstream(t *testing.T, session func(*websocket.Conn, *http.Request)) 
 	return upstream
 }
 
-func newSpeechBalancer(t *testing.T, upstream string, accounts ...*Account) string {
+func newSpeechBalancer(t *testing.T, upstream string, accounts ...*Account) (*server, string) {
 	t.Helper()
 	srv := newTestServer(t, accounts)
 	srv.upstream = upstream
+	srv.admission = newAdmissionGate(maxActiveProxyRequests)
 	srv.lookupAPIKey = func(key string) (string, bool, error) { return "laptop", key == "balancer-key", nil }
 	balancer := httptest.NewServer(srv.routes())
 	t.Cleanup(balancer.Close)
-	return "ws" + strings.TrimPrefix(balancer.URL, "http") + claudeSpeechPath + testSpeechQuery
+	return srv, "ws" + strings.TrimPrefix(balancer.URL, "http") + claudeSpeechPath + testSpeechQuery
 }
 
 func speechHeader() http.Header {
@@ -118,7 +119,7 @@ func receive[T any](t *testing.T, values <-chan T) T {
 func TestClaudeSpeechRequiresAPIKey(t *testing.T) {
 	var dialed atomic.Bool
 	upstream := speechUpstream(t, func(*websocket.Conn, *http.Request) { dialed.Store(true) })
-	endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
+	_, endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
 
 	for _, header := range []http.Header{nil, {"Authorization": {"Bearer wrong"}}} {
 		_, response, err := dialSpeech(t, endpoint, header)
@@ -134,7 +135,7 @@ func TestClaudeSpeechRequiresAPIKey(t *testing.T) {
 func TestClaudeSpeechRejectsInvalidRequestsBeforeDialing(t *testing.T) {
 	var dialed atomic.Bool
 	upstream := speechUpstream(t, func(*websocket.Conn, *http.Request) { dialed.Store(true) })
-	endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
+	_, endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
 
 	request, err := http.NewRequest(http.MethodGet, "http"+strings.TrimPrefix(endpoint, "ws"), nil)
 	if err != nil {
@@ -173,7 +174,7 @@ func TestClaudeSpeechForwardsAllowlistedQueryAndHeaders(t *testing.T) {
 		seen <- r
 		conn.Close(websocket.StatusNormalClosure, "")
 	})
-	endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
+	_, endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
 
 	header := speechHeader()
 	header.Set("User-Agent", "supaterm/0.0.0")
@@ -245,7 +246,7 @@ func TestClaudeSpeechRelaysFramesAndUpstreamClose(t *testing.T) {
 		conn.Write(ctx, websocket.MessageBinary, []byte{0xde, 0xad})
 		conn.Close(4000, "stream finished")
 	})
-	endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
+	_, endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
 	conn, _, err := dialSpeech(t, endpoint, speechHeader())
 	if err != nil {
 		t.Fatal(err)
@@ -292,7 +293,7 @@ func TestClaudeSpeechPropagatesClientClose(t *testing.T) {
 			}
 		}
 	})
-	endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
+	_, endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
 	conn, _, err := dialSpeech(t, endpoint, speechHeader())
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +311,7 @@ func TestClaudeSpeechClosesOversizedClientFrames(t *testing.T) {
 		_, _, err := conn.Read(context.Background())
 		closed <- err
 	})
-	endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
+	_, endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
 	conn, _, err := dialSpeech(t, endpoint, speechHeader())
 	if err != nil {
 		t.Fatal(err)
@@ -320,7 +321,43 @@ func TestClaudeSpeechClosesOversizedClientFrames(t *testing.T) {
 	if websocket.CloseStatus(err) != websocket.StatusMessageTooBig {
 		t.Fatalf("client close = %v, want %d", err, websocket.StatusMessageTooBig)
 	}
-	wantSpeechClose(t, receive(t, closed), websocket.StatusGoingAway, "client disconnected")
+	wantSpeechClose(t, receive(t, closed), websocket.StatusMessageTooBig, "speech frame exceeded 1 MiB")
+}
+
+func TestClaudeSpeechClosesOversizedUpstreamFrames(t *testing.T) {
+	upstream := speechUpstream(t, func(conn *websocket.Conn, _ *http.Request) {
+		conn.Write(context.Background(), websocket.MessageText, make([]byte, claudeSpeechMaxMessage+1))
+		conn.Read(context.Background())
+	})
+	_, endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
+	conn, _, err := dialSpeech(t, endpoint, speechHeader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = readSpeech(t, conn)
+	wantSpeechClose(t, err, websocket.StatusMessageTooBig, "speech frame exceeded 1 MiB")
+}
+
+func TestClaudeSpeechClosesSessionsWhenDrainStarts(t *testing.T) {
+	closed := make(chan error, 1)
+	upstream := speechUpstream(t, func(conn *websocket.Conn, _ *http.Request) {
+		_, _, err := conn.Read(context.Background())
+		closed <- err
+	})
+	srv, endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0))
+	conn, _, err := dialSpeech(t, endpoint, speechHeader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.admission.beginDrain()
+	_, _, err = readSpeech(t, conn)
+	wantSpeechClose(t, err, websocket.StatusServiceRestart, "balancer shutting down")
+	wantSpeechClose(t, receive(t, closed), websocket.StatusServiceRestart, "balancer shutting down")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.admission.wait(ctx); err != nil {
+		t.Fatalf("admission still held after speech drain: %v", err)
+	}
 }
 
 func TestClaudeSpeechFailsOverRejectedUpgrades(t *testing.T) {
@@ -344,7 +381,7 @@ func TestClaudeSpeechFailsOverRejectedUpgrades(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 	accountA, accountB := testAccount("account-a", 0), testAccount("account-b", 0)
-	endpoint := newSpeechBalancer(t, upstream.URL, accountA, accountB)
+	_, endpoint := newSpeechBalancer(t, upstream.URL, accountA, accountB)
 
 	conn, _, err := dialSpeech(t, endpoint, speechHeader())
 	if err != nil {
@@ -378,7 +415,7 @@ func TestClaudeSpeechFailsOverPersistentUnauthorized(t *testing.T) {
 		conn.Close(websocket.StatusNormalClosure, "")
 	}))
 	t.Cleanup(upstream.Close)
-	endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0), testAccount("account-b", 0))
+	_, endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0), testAccount("account-b", 0))
 
 	conn, _, err := dialSpeech(t, endpoint, speechHeader())
 	if err != nil {
@@ -403,7 +440,7 @@ func TestClaudeSpeechRefreshesNearExpiryBeforeDialing(t *testing.T) {
 	})
 	account := testAccount("account-a", 0)
 	account.LastRefresh = time.Now().Add(-tokenRefreshFallback - time.Hour)
-	endpoint := newSpeechBalancer(t, upstream.URL, account)
+	_, endpoint := newSpeechBalancer(t, upstream.URL, account)
 
 	conn, _, err := dialSpeech(t, endpoint, speechHeader())
 	if err != nil {
@@ -434,18 +471,26 @@ func TestClaudeSpeechReturnsFinalUpgradeRejection(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				log.record(r)
 				w.Header().Set("Retry-After", "30")
-				writeError(w, test.status, "speech unavailable")
+				writeError(w, test.status, strings.Repeat("speech unavailable ", 100))
 			}))
 			t.Cleanup(upstream.Close)
-			endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0), testAccount("account-b", 0))
+			_, endpoint := newSpeechBalancer(t, upstream.URL, testAccount("account-a", 0), testAccount("account-b", 0))
 
 			_, response, err := dialSpeech(t, endpoint, speechHeader())
 			if err == nil || response == nil || response.StatusCode != test.status {
 				t.Fatalf("dial = %v, %v; want HTTP %d", response, err, test.status)
 			}
-			body, _ := io.ReadAll(response.Body)
-			if !strings.Contains(string(body), "speech unavailable") || response.Header.Get("Retry-After") != "30" {
-				t.Fatalf("rejection body = %s, Retry-After = %q", body, response.Header.Get("Retry-After"))
+			var rejection struct {
+				Error struct {
+					Message string `json:"message"`
+					Type    string `json:"type"`
+				} `json:"error"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&rejection); err != nil || rejection.Error.Type != "balancer_error" {
+				t.Fatalf("rejection body = %+v, %v; want a balancer error", rejection, err)
+			}
+			if got := response.Header.Get("Retry-After"); got != "30" {
+				t.Fatalf("Retry-After = %q, want 30", got)
 			}
 			if got := len(log.seen()); got != test.attempts {
 				t.Fatalf("upstream attempts = %d, want %d", got, test.attempts)
@@ -457,7 +502,7 @@ func TestClaudeSpeechReturnsFinalUpgradeRejection(t *testing.T) {
 func TestClaudeSpeechWithoutAccountsReturnsUnavailable(t *testing.T) {
 	var dialed atomic.Bool
 	upstream := speechUpstream(t, func(*websocket.Conn, *http.Request) { dialed.Store(true) })
-	endpoint := newSpeechBalancer(t, upstream.URL)
+	_, endpoint := newSpeechBalancer(t, upstream.URL)
 	_, response, err := dialSpeech(t, endpoint, speechHeader())
 	if err == nil || response == nil || response.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("dial = %v, %v; want HTTP 503", response, err)

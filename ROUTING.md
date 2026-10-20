@@ -128,7 +128,7 @@ move to another account:
 - A `429` moves to the next account. A credential-wide five-hour or seven-day
   rejection also cools the account down, as it does for Messages.
 - Any other rejection, and the last rejection after three accounts, is returned
-  to the client as an HTTP response with the upstream status and body.
+  to the client as an HTTP error with the upstream status and `Retry-After`.
 
 Once the client is upgraded, the account is fixed for the session and there is
 no failover. Frames pass through unchanged in both directions, and each side's
@@ -141,7 +141,7 @@ session itself, it uses these close codes:
 | `1009` | a frame exceeded 1 MiB |
 | `1008` | speech session time limit reached (six minutes) |
 | `1008` | speech session idle timeout (30 seconds without a frame) |
-| `1012` | balancer shutting down |
+| `1012` | balancer shutting down (sent as soon as the server starts draining) |
 
 Logs record the account, API key name, close side, close code, duration, and
 byte counts. They never contain audio or transcript text.
