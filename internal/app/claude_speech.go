@@ -30,7 +30,6 @@ var (
 		"language", "use_conversation_engine", "forward_interims",
 	}
 	claudeSpeechForwardedHeaders = []string{"User-Agent", "X-App", "Anthropic-Client-Platform", "X-Config-Keyterms"}
-	errClaudeSpeechRefresh       = errors.New("Claude account refresh failed before speech dial")
 )
 
 func (s *server) claudeSpeechHTTP(w http.ResponseWriter, r *http.Request) {
@@ -119,8 +118,6 @@ func (s *server) dialClaudeSpeech(ctx context.Context, endpoint string, inbound 
 		switch {
 		case err == nil:
 			return conn, account, nil, nil
-		case errors.Is(err, errClaudeSpeechRefresh):
-			continue
 		case response == nil || response.StatusCode < http.StatusBadRequest:
 			return nil, nil, nil, err
 		}
@@ -143,8 +140,8 @@ func (s *server) dialClaudeSpeech(ctx context.Context, endpoint string, inbound 
 func (s *server) dialClaudeSpeechAccount(ctx context.Context, endpoint string, inbound http.Header, account *Account) (*websocket.Conn, *http.Response, error) {
 	id := claudeAccountID(account)
 	refreshed := account.refreshDue(time.Now())
-	if refreshed && !s.refreshedContext(ctx, account, id) {
-		return nil, nil, errClaudeSpeechRefresh
+	if refreshed {
+		s.refreshedContext(ctx, account, id)
 	}
 	for {
 		dialCtx, cancel := context.WithTimeout(ctx, claudeSpeechDialTimeout)

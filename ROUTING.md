@@ -109,8 +109,9 @@ partial usage is not invented.
 speech-to-text service. It authenticates with the client API key, then picks an
 account with fresh placement. Dictation sessions are short and stateless, so
 there is no conversation affinity. The balancer refreshes the account's
-claude.ai OAuth token first if it is near expiry. It then opens the upstream
-socket before it upgrades the client.
+claude.ai OAuth token first if it is near expiry. If that refresh fails, it
+still dials with the current token, which may remain valid for a few minutes.
+It then opens the upstream socket before it upgrades the client.
 
 The upstream URL keeps only the `encoding`, `sample_rate`, `channels`,
 `endpointing_ms`, `utterance_end_ms`, `language`, `use_conversation_engine`, and

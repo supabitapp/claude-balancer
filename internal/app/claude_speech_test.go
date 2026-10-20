@@ -456,6 +456,41 @@ func TestClaudeSpeechRefreshesNearExpiryBeforeDialing(t *testing.T) {
 	}
 }
 
+func TestClaudeSpeechDialsCurrentTokenWhenRefreshFails(t *testing.T) {
+	var refreshCalls atomic.Int64
+	oauth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		refreshCalls.Add(1)
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	previous := oauthEndpoint
+	oauthEndpoint = oauth.URL
+	t.Cleanup(func() {
+		oauthEndpoint = previous
+		oauth.Close()
+	})
+	var log speechUpstreamLog
+	upstream := speechUpstream(t, func(conn *websocket.Conn, r *http.Request) {
+		log.record(r)
+		conn.Close(websocket.StatusNormalClosure, "")
+	})
+	account := testAccount("account-a", 0)
+	account.LastRefresh = time.Now().Add(-tokenRefreshFallback - time.Hour)
+	_, endpoint := newSpeechBalancer(t, upstream.URL, account)
+
+	conn, _, err := dialSpeech(t, endpoint, speechHeader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = readSpeech(t, conn)
+	wantSpeechClose(t, err, websocket.StatusNormalClosure, "")
+	if got := strings.Join(log.seen(), ","); got != "token-account-a" {
+		t.Fatalf("upstream tokens = %s, want token-account-a", got)
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
+	}
+}
+
 func TestClaudeSpeechReturnsFinalUpgradeRejection(t *testing.T) {
 	for _, test := range []struct {
 		name     string
