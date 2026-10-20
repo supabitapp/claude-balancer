@@ -959,7 +959,7 @@ func (s *server) recordClaudeRoute(route claudeRoute, model string, account *Acc
 	if len(owners) > 0 {
 		expected = owners[0]
 	}
-	_ = s.pool.store.recordRouteIfOwner(storedRoute{At: at, Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}, expected, at.Add(-claudeRouteFreshness))
+	_ = s.pool.store.recordRouteIfOwner(storedRoute{At: at, Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}, expected, time.Time{})
 	account.accepted(at)
 }
 
