@@ -456,7 +456,7 @@ func (s *Store) RecordRoute(route Route) error {
 	})
 }
 
-func (s *Store) RecordRouteIfOwner(route Route, expected string) error {
+func (s *Store) RecordRouteIfOwner(route Route, expected string, staleBefore time.Time) error {
 	if route.At.IsZero() || route.Account == "" {
 		return errors.New("route has no time or account")
 	}
@@ -474,14 +474,10 @@ func (s *Store) RecordRouteIfOwner(route Route, expected string) error {
 			return fmt.Errorf("route account %q does not exist", route.Account)
 		}
 		for _, key := range routeKeys(route.Thread, route.Session, route.Aliases...) {
-			if expected == "" {
-				_, err = conn.ExecContext(context.Background(), `INSERT INTO routes (key, account_id, updated_at_ns)
-					VALUES (?, ?, ?) ON CONFLICT (key) DO NOTHING`, key, route.Account, encodeTime(route.At))
-			} else {
-				_, err = conn.ExecContext(context.Background(), `INSERT INTO routes (key, account_id, updated_at_ns)
-					VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET account_id = excluded.account_id,
-					updated_at_ns = excluded.updated_at_ns WHERE routes.account_id = ?`, key, route.Account, encodeTime(route.At), expected)
-			}
+			_, err = conn.ExecContext(context.Background(), `INSERT INTO routes (key, account_id, updated_at_ns)
+				VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET account_id = excluded.account_id,
+				updated_at_ns = excluded.updated_at_ns WHERE routes.account_id = ? OR routes.updated_at_ns < ?`,
+				key, route.Account, encodeTime(route.At), expected, encodeTime(staleBefore))
 			if err != nil {
 				return err
 			}
