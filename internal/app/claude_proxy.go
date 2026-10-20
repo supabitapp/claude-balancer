@@ -25,6 +25,7 @@ const (
 	claudeMaxResponseBody    = 256 << 20
 	claudeUpstreamTimeout    = 90 * time.Second
 	claudeMaxFailoverAttempt = 2
+	claudeRouteFreshness     = time.Hour
 )
 
 // claudeMessageRequest contains only the fields needed to choose a route. The
@@ -518,7 +519,8 @@ func (s *server) reserveClaudeRoute(route claudeRoute, model string, account *Ac
 	if len(owners) > 0 {
 		expected = owners[0]
 	}
-	_ = s.pool.store.recordRouteIfOwner(storedRoute{At: time.Now(), Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}, expected)
+	now := time.Now()
+	_ = s.pool.store.recordRouteIfOwner(storedRoute{At: now, Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}, expected, now.Add(-claudeRouteFreshness))
 }
 
 func (s *server) claudeModels(w http.ResponseWriter, r *http.Request) {
@@ -611,7 +613,7 @@ func (s *server) claudeRouteOwners(route claudeRoute, model string) ([]string, e
 	}
 	owners := make([]string, 0, 3)
 	for _, key := range route.keys(model) {
-		values, err := s.pool.store.routeOwnersFresh(key, "", time.Hour)
+		values, err := s.pool.store.routeOwnersFresh(key, "", claudeRouteFreshness)
 		if err != nil {
 			return nil, err
 		}
@@ -957,7 +959,7 @@ func (s *server) recordClaudeRoute(route claudeRoute, model string, account *Acc
 	if len(owners) > 0 {
 		expected = owners[0]
 	}
-	_ = s.pool.store.recordRouteIfOwner(storedRoute{At: at, Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}, expected)
+	_ = s.pool.store.recordRouteIfOwner(storedRoute{At: at, Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}, expected, time.Time{})
 	account.accepted(at)
 }
 

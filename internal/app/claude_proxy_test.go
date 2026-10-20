@@ -277,6 +277,40 @@ func TestClaudeMessagesSkipsExhaustedFiveHourWindow(t *testing.T) {
 	}
 }
 
+func TestClaudeMessagesKeepsSessionOnOneAccountAfterIdleRoute(t *testing.T) {
+	var served []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served = append(served, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer token-"))
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"msg","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newTestServer(t, []*Account{testAccount("account-a", 10), testAccount("account-b", 10), testAccount("account-c", 10)})
+	srv.upstream = upstream.URL
+	srv.lookupAPIKey = func(string) (string, bool, error) { return "test", true, nil }
+	key := claudeRouteKey("claude-opus", "session-a")
+	if err := srv.pool.store.recordRoute(storedRoute{At: time.Now().Add(-2 * time.Hour), Thread: key, Account: "account-a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 4 {
+		request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-opus","messages":[]}`))
+		request.Header.Set("Authorization", "Bearer test")
+		request.Header.Set("X-Claude-Code-Session-Id", "session-a")
+		response := httptest.NewRecorder()
+		srv.claudeMessagesHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+		}
+	}
+	for _, account := range served[1:] {
+		if account != served[0] {
+			t.Fatalf("session served by %v, want one account after the idle route", served)
+		}
+	}
+}
+
 func TestClaudeRouteFromPreservesSubagentHierarchy(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	request.Header.Set("X-Claude-Code-Session-Id", "root-session")

@@ -179,8 +179,8 @@ func (s *StateStore) recordRoute(route storedRoute) error {
 	return s.raw.RecordRoute(route)
 }
 
-func (s *StateStore) recordRouteIfOwner(route storedRoute, expected string) error {
-	return s.raw.RecordRouteIfOwner(route, expected)
+func (s *StateStore) recordRouteIfOwner(route storedRoute, expected string, staleBefore time.Time) error {
+	return s.raw.RecordRouteIfOwner(route, expected, staleBefore)
 }
 
 func (s *StateStore) preserveRouteOwners(at time.Time, account string, keys []string) error {

@@ -138,10 +138,10 @@ func TestRecordRouteIfOwnerDoesNotOverwriteReboundOwner(t *testing.T) {
 	if err := store.RecordRoute(Route{At: now, Thread: "route", Account: "a"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordRouteIfOwner(Route{At: now.Add(time.Second), Thread: "route", Account: "b"}, "a"); err != nil {
+	if err := store.RecordRouteIfOwner(Route{At: now.Add(time.Second), Thread: "route", Account: "b"}, "a", time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordRouteIfOwner(Route{At: now.Add(2 * time.Second), Thread: "route", Account: "a"}, "a"); err != nil {
+	if err := store.RecordRouteIfOwner(Route{At: now.Add(2 * time.Second), Thread: "route", Account: "a"}, "a", time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	owners, err := store.RouteOwners("route", "")
@@ -150,5 +150,40 @@ func TestRecordRouteIfOwnerDoesNotOverwriteReboundOwner(t *testing.T) {
 	}
 	if !reflect.DeepEqual(owners, []string{"b"}) {
 		t.Fatalf("owners = %v, want rebound owner b", owners)
+	}
+}
+
+func TestRecordRouteIfOwnerReplacesStaleOwner(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now()
+	_, err = store.MutateAccounts(func(accounts []Account) ([]Account, error) {
+		return []Account{
+			{ID: "a", IDToken: "a", AccessToken: "a", RefreshToken: "a", RoutingMode: "normal", LastRefresh: now, LastUsed: now},
+			{ID: "b", IDToken: "b", AccessToken: "b", RefreshToken: "b", RoutingMode: "normal", LastRefresh: now, LastUsed: now},
+			{ID: "c", IDToken: "c", AccessToken: "c", RefreshToken: "c", RoutingMode: "normal", LastRefresh: now, LastUsed: now},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRoute(Route{At: now.Add(-2 * time.Hour), Thread: "route", Account: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRouteIfOwner(Route{At: now, Thread: "route", Account: "b"}, "", now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRouteIfOwner(Route{At: now.Add(time.Second), Thread: "route", Account: "c"}, "", now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	owners, err := store.RouteOwnersFresh("route", "", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(owners, []string{"b"}) {
+		t.Fatalf("owners = %v, want b to replace the stale owner and keep the route", owners)
 	}
 }
