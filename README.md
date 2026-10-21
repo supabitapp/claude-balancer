@@ -106,7 +106,7 @@ claude-balancer keys rm my-laptop
 `normal` accounts participate in the standard round-robin selector. `priority`
 accounts are selected before normal accounts. `paused` accounts receive no new
 requests and their active connections are retired so clients can reconnect
-elsewhere.
+elsewhere. Free accounts stay on the dashboard but are never routed.
 
 ## Routing behavior
 

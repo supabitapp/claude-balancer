@@ -17,6 +17,12 @@ remaining Fable-scoped capacity. Included quota is preferred. A positive
 credit balance can be used only when no eligible account has included quota and
 spend limits allow it.
 
+Accounts without a Claude subscription are shown on the dashboard but never
+routed. The plan poll marks an account `free` when its OAuth profile reports
+neither Max nor Pro and an organization type other than `claude_max`,
+`claude_pro`, `claude_team`, or `claude_enterprise`. A profile without an
+organization type is never classified as free.
+
 The established owner of a conversation outranks account priority. The affinity
 key combines provider, model, session ID, and agent ID. The router reads these
 values from `X-Claude-Code-Session-Id`, `X-Claude-Code-Agent-Id`, and the request

@@ -716,6 +716,9 @@ func claudeProfilePlan(profile *claudeOAuthProfile) string {
 	if profile == nil {
 		return ""
 	}
+	if claudeFreeProfile(profile) {
+		return "free"
+	}
 	for _, candidate := range []string{
 		profile.Organization.RateLimitTier,
 		profile.Organization.OrganizationType,
@@ -731,6 +734,18 @@ func claudeProfilePlan(profile *claudeOAuthProfile) string {
 		return "claude_pro"
 	}
 	return ""
+}
+
+func claudeFreeProfile(profile *claudeOAuthProfile) bool {
+	if profile.Account.HasClaudeMax || profile.Account.HasClaudePro {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(profile.Organization.OrganizationType)) {
+	case "", "claude_max", "claude_pro", "claude_team", "claude_enterprise":
+		return false
+	default:
+		return true
+	}
 }
 
 func randomClaudeOAuthToken(size int) (string, error) {

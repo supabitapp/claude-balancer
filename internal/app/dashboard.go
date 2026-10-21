@@ -894,6 +894,8 @@ func dashboardPlan(plan string) string {
 		return "Max"
 	case "claude_pro":
 		return "Pro"
+	case "free":
+		return "Free"
 	case "self_serve_business_prolite":
 		return "business_prolite"
 	default:
