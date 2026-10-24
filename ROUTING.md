@@ -81,6 +81,17 @@ completes.
 it is exposed to clients. The router never sleeps a request for an unbounded
 period and never turns a client cancellation into an account penalty.
 
+An Anthropic overload moves to another account like other transient failures.
+That covers a `529` response and an `overloaded_error` as the first event of a
+stream. When no account is left, the client receives `503` with
+`x-should-retry: true` and error type `api_error`. The original type and status
+are in `upstream_type` and `upstream_status`. Claude Code stops after three
+overload errors on Opus requests sent through a gateway, but it retries other
+5xx responses with its normal backoff. This mapping lets it outlast a longer
+overload. An overload after streamed output stays in the stream unchanged.
+Claude Code retries a stream error that has no HTTP status only when it is
+typed as an overload.
+
 ## Streaming and reconnects
 
 The Messages API stream is committed when the upstream sends `message_start` or

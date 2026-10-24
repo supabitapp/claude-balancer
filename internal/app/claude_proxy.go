@@ -26,6 +26,7 @@ const (
 	claudeUpstreamTimeout    = 90 * time.Second
 	claudeMaxFailoverAttempt = 2
 	claudeRouteFreshness     = time.Hour
+	claudeOverloadedStatus   = 529
 )
 
 // claudeMessageRequest contains only the fields needed to choose a route. The
@@ -377,6 +378,30 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
+		if parsed.Stream && response.StatusCode >= 200 && response.StatusCode < 300 {
+			bootstrap, stream, streamErr := claudeStreamBootstrap(response.Body)
+			if streamErr != nil {
+				response.Body.Close()
+				if ctx.Err() != nil {
+					writeError(w, http.StatusBadGateway, "Claude stream canceled before output")
+					return
+				}
+				if attempt < claudeMaxFailoverAttempt {
+					skip[claudeAccountID(account)] = true
+					continue
+				}
+				writeError(w, http.StatusBadGateway, "Claude stream ended before output")
+				return
+			}
+			if first := claudeStreamFirstData(bootstrap); claudeOverloadError(first) {
+				stream.Close()
+				response.StatusCode = claudeOverloadedStatus
+				response.Header.Set("Content-Type", "application/json")
+				response.Body = io.NopCloser(bytes.NewReader(first))
+			} else {
+				response.Body = &claudeStreamReadCloser{Reader: io.MultiReader(bytes.NewReader(bootstrap), stream), stream: stream}
+			}
+		}
 		var failureBody []byte
 		if claudeSafeFailoverStatus(response.StatusCode) && attempt < claudeMaxFailoverAttempt {
 			data, readErr := io.ReadAll(io.LimitReader(response.Body, claudeMaxResponseBody+1))
@@ -397,7 +422,8 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 			failureBody = data
 			response.Body = io.NopCloser(bytes.NewReader(data))
 		}
-		if response.StatusCode == http.StatusTooManyRequests && failureBody == nil {
+		failed := response.StatusCode < 200 || response.StatusCode >= 300
+		if failed && failureBody == nil {
 			data, readErr := io.ReadAll(io.LimitReader(response.Body, claudeMaxResponseBody+1))
 			if readErr == nil && len(data) <= claudeMaxResponseBody {
 				failureBody = data
@@ -405,22 +431,13 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 				response.Body = io.NopCloser(bytes.NewReader(data))
 			}
 		}
-		if parsed.Stream && response.StatusCode >= 200 && response.StatusCode < 300 {
-			bootstrap, stream, streamErr := claudeStreamBootstrap(response.Body)
-			if streamErr != nil {
-				response.Body.Close()
-				if ctx.Err() != nil {
-					writeError(w, http.StatusBadGateway, "Claude stream canceled before output")
-					return
-				}
-				if attempt < claudeMaxFailoverAttempt {
-					skip[claudeAccountID(account)] = true
-					continue
-				}
-				writeError(w, http.StatusBadGateway, "Claude stream ended before output")
-				return
-			}
-			response.Body = &claudeStreamReadCloser{Reader: io.MultiReader(bytes.NewReader(bootstrap), stream), stream: stream}
+		if failed && (response.StatusCode == claudeOverloadedStatus || claudeOverloadError(failureBody)) {
+			failureBody = claudeRetryableOverload(response.StatusCode, failureBody)
+			response.StatusCode = http.StatusServiceUnavailable
+			response.Header.Set("Content-Type", "application/json")
+			response.Header.Set("X-Should-Retry", "true")
+			response.Body.Close()
+			response.Body = io.NopCloser(bytes.NewReader(failureBody))
 		}
 		defer response.Body.Close()
 		account.observeClaudeHeaders(response.Header)
@@ -480,7 +497,7 @@ func claudeStreamBootstrap(body io.ReadCloser) ([]byte, io.ReadCloser, error) {
 		n, err := body.Read(chunk)
 		if n > 0 {
 			buffer = append(buffer, chunk[:n]...)
-			if claudeStreamBootstrapReady(buffer) {
+			if claudeStreamFirstData(buffer) != nil {
 				return buffer, body, nil
 			}
 		}
@@ -491,20 +508,48 @@ func claudeStreamBootstrap(body io.ReadCloser) ([]byte, io.ReadCloser, error) {
 	return nil, nil, errors.New("Claude stream bootstrap exceeded limit")
 }
 
-func claudeStreamBootstrapReady(data []byte) bool {
+func claudeStreamFirstData(data []byte) []byte {
 	for {
 		boundary := bytes.Index(data, []byte("\n\n"))
 		if boundary < 0 {
-			return false
+			return nil
 		}
 		event := data[:boundary]
 		for _, line := range bytes.Split(event, []byte("\n")) {
-			if bytes.HasPrefix(bytes.TrimSpace(line), []byte("data:")) && len(bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(line), []byte("data:")))) > 0 {
-				return true
+			payload, ok := bytes.CutPrefix(bytes.TrimSpace(line), []byte("data:"))
+			payload = bytes.TrimSpace(payload)
+			if ok && len(payload) > 0 {
+				return payload
 			}
 		}
 		data = data[boundary+2:]
 	}
+}
+
+func claudeOverloadError(body []byte) bool {
+	var envelope struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	return json.Unmarshal(body, &envelope) == nil && envelope.Error.Type == "overloaded_error"
+}
+
+func claudeRetryableOverload(status int, body []byte) []byte {
+	envelope := map[string]json.RawMessage{}
+	details := map[string]json.RawMessage{}
+	if json.Unmarshal(body, &envelope) != nil || json.Unmarshal(envelope["error"], &details) != nil || details == nil {
+		envelope = map[string]json.RawMessage{"type": json.RawMessage(`"error"`)}
+		details = map[string]json.RawMessage{"message": json.RawMessage(`"Overloaded"`)}
+	}
+	if upstreamType, ok := details["type"]; ok {
+		details["upstream_type"] = upstreamType
+	}
+	details["type"] = json.RawMessage(`"api_error"`)
+	envelope["error"], _ = json.Marshal(details)
+	envelope["upstream_status"] = json.RawMessage(strconv.Itoa(status))
+	data, _ := json.Marshal(envelope)
+	return data
 }
 
 func (s *server) reserveClaudeRoute(route claudeRoute, model string, account *Account, owners []string) {
@@ -827,7 +872,7 @@ func claudeSafeFailoverStatus(status int) bool {
 	switch status {
 	case http.StatusForbidden, http.StatusRequestTimeout, http.StatusTooManyRequests,
 		http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable,
-		http.StatusGatewayTimeout, 529:
+		http.StatusGatewayTimeout, claudeOverloadedStatus:
 		return true
 	default:
 		return false

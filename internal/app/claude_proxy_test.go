@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -412,6 +413,7 @@ func TestClaudeStreamDoesNotRetryAfterBootstrapOutput(t *testing.T) {
 		calls++
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\"}\n\n")
+		_, _ = io.WriteString(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n")
 	}))
 	t.Cleanup(upstream.Close)
 	srv := newTestServer(t, []*Account{testAccount("account-a", 10), testAccount("account-b", 10)})
@@ -421,7 +423,82 @@ func TestClaudeStreamDoesNotRetryAfterBootstrapOutput(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer test")
 	response := httptest.NewRecorder()
 	srv.claudeMessagesHTTP(response, request)
-	if response.Code != http.StatusOK || calls != 1 {
-		t.Fatalf("status = %d calls = %d, want 200 and one attempt", response.Code, calls)
+	if response.Code != http.StatusOK || calls != 1 || !strings.Contains(response.Body.String(), `"type":"overloaded_error"`) {
+		t.Fatalf("status = %d calls = %d body = %s, want 200, one attempt, and the committed overload", response.Code, calls, response.Body.String())
+	}
+}
+
+func TestClaudeOverloadIsRetryableByClient(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		stream bool
+	}{
+		{"HTTP 529", false},
+		{"stream error before output", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls int
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				overload := `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_test"}`
+				if test.stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					fmt.Fprintf(w, "event: error\ndata: %s\n\n", overload)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Retry-After", "7")
+				w.WriteHeader(claudeOverloadedStatus)
+				_, _ = io.WriteString(w, overload)
+			}))
+			t.Cleanup(upstream.Close)
+			srv := newTestServer(t, []*Account{testAccount("account-a", 10), testAccount("account-b", 10), testAccount("account-c", 10)})
+			srv.upstream = upstream.URL
+			srv.lookupAPIKey = func(string) (string, bool, error) { return "test", true, nil }
+			request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(fmt.Sprintf(`{"model":"claude-opus-5-5","stream":%t,"messages":[]}`, test.stream)))
+			request.Header.Set("Authorization", "Bearer test")
+			response := httptest.NewRecorder()
+			srv.claudeMessagesHTTP(response, request)
+			body := response.Body.String()
+			if response.Code != http.StatusServiceUnavailable || response.Header().Get("X-Should-Retry") != "true" || calls != claudeMaxFailoverAttempt+1 {
+				t.Fatalf("status = %d headers = %v calls = %d body = %s", response.Code, response.Header(), calls, body)
+			}
+			if !test.stream && response.Header().Get("Retry-After") != "7" {
+				t.Fatalf("Retry-After = %q, want upstream hint", response.Header().Get("Retry-After"))
+			}
+			if strings.Contains(body, `"type":"overloaded_error"`) {
+				t.Fatalf("overload still matches the client's terminal overload check: %s", body)
+			}
+			for _, detail := range []string{`"type":"api_error"`, `"upstream_type":"overloaded_error"`, `"upstream_status":529`, `"message":"Overloaded"`, `"request_id":"req_test"`} {
+				if !strings.Contains(body, detail) {
+					t.Fatalf("missing %s in %s", detail, body)
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeStreamOverloadBeforeOutputFailsOver(t *testing.T) {
+	var calls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if calls == 1 {
+			_, _ = io.WriteString(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n")
+			return
+		}
+		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\"}\n\n")
+	}))
+	t.Cleanup(upstream.Close)
+	srv := newTestServer(t, []*Account{testAccount("account-a", 10), testAccount("account-b", 10)})
+	srv.upstream = upstream.URL
+	srv.lookupAPIKey = func(string) (string, bool, error) { return "test", true, nil }
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet","stream":true,"messages":[]}`))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	srv.claudeMessagesHTTP(response, request)
+	body := response.Body.String()
+	if response.Code != http.StatusOK || calls != 2 || !strings.Contains(body, "message_start") || strings.Contains(body, "overloaded_error") {
+		t.Fatalf("status = %d calls = %d body = %s, want failover to a healthy stream", response.Code, calls, body)
 	}
 }
