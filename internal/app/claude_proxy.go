@@ -331,9 +331,15 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	skip := map[string]bool{}
 	refreshed := map[string]bool{}
+	var overloadHeader http.Header
+	var overloadBody []byte
 	for attempt := 0; attempt <= claudeMaxFailoverAttempt; attempt++ {
 		account := s.selectClaudeAccountForModel(owners, skip, parsed.Model)
 		if account == nil {
+			if overloadBody != nil {
+				writeClaudeOverload(w, overloadHeader, overloadBody)
+				return
+			}
 			if retryAfter := s.claudeModelRetryAfter(parsed.Model); retryAfter > 0 {
 				w.Header().Set("Retry-After", strconv.FormatInt(int64((retryAfter+time.Second-1)/time.Second), 10))
 				writeError(w, http.StatusTooManyRequests, "Claude model is temporarily unavailable")
@@ -396,7 +402,6 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 			if first := claudeStreamFirstData(bootstrap); claudeOverloadError(first) {
 				stream.Close()
 				response.StatusCode = claudeOverloadedStatus
-				response.Header.Set("Content-Type", "application/json")
 				response.Body = io.NopCloser(bytes.NewReader(first))
 			} else {
 				response.Body = &claudeStreamReadCloser{Reader: io.MultiReader(bytes.NewReader(bootstrap), stream), stream: stream}
@@ -411,6 +416,9 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 				scope = claude429ScopeFor(response.Header, data)
 			}
 			if readErr == nil && len(data) <= claudeMaxResponseBody && claudeShouldFailover(response.StatusCode, response.Header, data) {
+				if claudeOverloaded(response.StatusCode, data) {
+					overloadHeader, overloadBody = response.Header, claudeRetryableOverload(response.StatusCode, data)
+				}
 				if scope == claude429Credential {
 					account.rateLimitedClaude(response.Header)
 				} else if scope == claude429Model {
@@ -425,19 +433,16 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		failed := response.StatusCode < 200 || response.StatusCode >= 300
 		if failed && failureBody == nil {
 			data, readErr := io.ReadAll(io.LimitReader(response.Body, claudeMaxResponseBody+1))
+			response.Body.Close()
+			response.Body = io.NopCloser(bytes.NewReader(data))
 			if readErr == nil && len(data) <= claudeMaxResponseBody {
 				failureBody = data
-				response.Body.Close()
-				response.Body = io.NopCloser(bytes.NewReader(data))
 			}
 		}
-		if failed && (response.StatusCode == claudeOverloadedStatus || claudeOverloadError(failureBody)) {
-			failureBody = claudeRetryableOverload(response.StatusCode, failureBody)
-			response.StatusCode = http.StatusServiceUnavailable
-			response.Header.Set("Content-Type", "application/json")
-			response.Header.Set("X-Should-Retry", "true")
-			response.Body.Close()
-			response.Body = io.NopCloser(bytes.NewReader(failureBody))
+		if failed && claudeOverloaded(response.StatusCode, failureBody) {
+			account.observeClaudeHeaders(response.Header)
+			writeClaudeOverload(w, response.Header, claudeRetryableOverload(response.StatusCode, failureBody))
+			return
 		}
 		defer response.Body.Close()
 		account.observeClaudeHeaders(response.Header)
@@ -526,6 +531,10 @@ func claudeStreamFirstData(data []byte) []byte {
 	}
 }
 
+func claudeOverloaded(status int, body []byte) bool {
+	return status == claudeOverloadedStatus || claudeOverloadError(body)
+}
+
 func claudeOverloadError(body []byte) bool {
 	var envelope struct {
 		Error struct {
@@ -550,6 +559,14 @@ func claudeRetryableOverload(status int, body []byte) []byte {
 	envelope["upstream_status"] = json.RawMessage(strconv.Itoa(status))
 	data, _ := json.Marshal(envelope)
 	return data
+}
+
+func writeClaudeOverload(w http.ResponseWriter, upstream http.Header, body []byte) {
+	copyClaudeResponseHeaders(w.Header(), upstream)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Should-Retry", "true")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write(body)
 }
 
 func (s *server) reserveClaudeRoute(route claudeRoute, model string, account *Account, owners []string) {
