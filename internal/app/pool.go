@@ -333,13 +333,9 @@ func (a *Account) routingCandidate() routingCandidate {
 	if plan == "" {
 		plan = claims.Auth.Plan
 	}
-	id := claims.Auth.AccountID
-	if id == "" {
-		id = claims.AccountID
-	}
 	return routingCandidate{
 		account:   a,
-		id:        id,
+		id:        claims.key(),
 		provider:  claims.Provider,
 		plan:      plan,
 		paused:    a.Paused,

@@ -593,14 +593,10 @@ func exchangeAccountRefreshToken(ctx context.Context, hc *http.Client, state acc
 	}
 	credentials := *refreshed
 	previous := claudeCredentialsFromIdentityToken(state.IDToken)
-	if credentials.AccountID == "" {
-		credentials.AccountID = previous.AccountID
-	}
+	credentials.AccountID = previous.AccountID
+	credentials.OrganizationID = previous.OrganizationID
 	if credentials.Email == "" {
 		credentials.Email = previous.Email
-	}
-	if credentials.OrganizationID == "" {
-		credentials.OrganizationID = previous.OrganizationID
 	}
 	if credentials.OrganizationName == "" {
 		credentials.OrganizationName = previous.OrganizationName

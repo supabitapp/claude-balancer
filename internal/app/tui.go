@@ -264,9 +264,10 @@ func (d dashboard) accounts(limit int) string {
 		trafficTurns += activityTotal(d.snap.Accounts[account.id()].Activity)
 	}
 
+	names := accountLabels(accounts, label)
 	nameW := 9
-	for _, a := range accounts {
-		nameW = max(nameW, lipgloss.Width(label(a)))
+	for _, name := range names {
+		nameW = max(nameW, lipgloss.Width(name))
 	}
 
 	gap := 1
@@ -385,9 +386,9 @@ func (d dashboard) accounts(limit int) string {
 			reset = styles.dim.Render(fit(short(next.Sub(now)), resetW))
 		}
 
-		marker, name := "  ", styles.text.Render(fit(label(a), nameW))
+		marker, name := "  ", styles.text.Render(fit(names[a.id()], nameW))
 		if start+i == cursor {
-			marker, name = styles.title.Render("▸ "), styles.title.Render(fit(label(a), nameW))
+			marker, name = styles.title.Render("▸ "), styles.title.Render(fit(names[a.id()], nameW))
 		}
 
 		rows = append(rows, marker+strings.Join([]string{
@@ -428,6 +429,23 @@ func formatPercent(value float64) string {
 
 func label(a *Account) string {
 	return cmp.Or(a.email(), a.id())
+}
+
+func accountLabels(accounts []*Account, name func(*Account) string) map[string]string {
+	emails := map[string]int{}
+	for _, account := range accounts {
+		emails[strings.ToLower(account.email())]++
+	}
+	out := make(map[string]string, len(accounts))
+	for _, account := range accounts {
+		claims := account.claims()
+		display := name(account)
+		if claims.OrganizationName != "" && emails[strings.ToLower(claims.Email)] > 1 {
+			display += " (" + claims.OrganizationName + ")"
+		}
+		out[claims.key()] = display
+	}
+	return out
 }
 
 var sparkRunes = []rune("▁▂▃▄▅▆▇█")
@@ -667,20 +685,14 @@ func (d dashboard) totals(width int) string {
 }
 
 func (d dashboard) shortNames() map[string]string {
-	out := d.accountNames()
-	for id, label := range out {
-		name, _, _ := strings.Cut(label, "@")
-		out[id] = name
-	}
-	return out
+	return accountLabels(d.pool.all(), func(a *Account) string {
+		name, _, _ := strings.Cut(label(a), "@")
+		return name
+	})
 }
 
 func (d dashboard) accountNames() map[string]string {
-	out := map[string]string{}
-	for _, account := range d.pool.all() {
-		out[account.id()] = label(account)
-	}
-	return out
+	return accountLabels(d.pool.all(), label)
 }
 
 func pad(s string, n int) string {

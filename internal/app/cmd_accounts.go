@@ -128,6 +128,7 @@ func listAccounts(pool *Pool, asJSON bool) error {
 			out = append(out, map[string]any{
 				"id":           a.id(),
 				"email":        a.email(),
+				"organization": a.claims().OrganizationName,
 				"plan":         a.plan(),
 				"paused":       candidate.paused,
 				"routing_mode": candidate.mode,
@@ -144,10 +145,11 @@ func listAccounts(pool *Pool, asJSON bool) error {
 		fmt.Println("no accounts; add one with: claude-balancer accounts add")
 		return nil
 	}
+	names := accountLabels(accounts, label)
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "EMAIL\tPLAN\tROUTING\tTOKEN")
 	for _, a := range accounts {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", label(a), a.plan(), routing(a), tokenStatus(a))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", names[a.id()], a.plan(), routing(a), tokenStatus(a))
 	}
 	return w.Flush()
 }

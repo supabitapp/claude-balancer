@@ -205,6 +205,38 @@ func TestExchangeAccountRefreshTokenUsesClaudeIssuerAndPreservesIdentity(t *test
 	}
 }
 
+func TestExchangeAccountRefreshTokenKeepsOrganizationKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			io.WriteString(w, `{"access_token":"new-access","expires_in":3600,"account":{"uuid":"other-account"},"organization":{"uuid":"other-org","name":"Renamed Org"}}`)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(server.Close)
+	oldToken, oldProfile := claudeOAuthTokenURL, claudeOAuthProfileURL
+	claudeOAuthTokenURL = server.URL + "/token"
+	claudeOAuthProfileURL = server.URL + "/profile"
+	t.Cleanup(func() { claudeOAuthTokenURL, claudeOAuthProfileURL = oldToken, oldProfile })
+
+	for _, organization := range []string{"org", ""} {
+		state := accountState{
+			IDToken:      claudeIdentityToken(claudeCredentials{AccountID: "account", OrganizationID: organization}),
+			RefreshToken: "old-refresh",
+		}
+		tokens, _, err := exchangeAccountRefreshToken(context.Background(), server.Client(), state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := accountIDFromToken(tokens.IDToken), accountIDFromToken(state.IDToken); got != want {
+			t.Fatalf("refreshed key = %q, want %q", got, want)
+		}
+		if got := claudeCredentialsFromIdentityToken(tokens.IDToken).OrganizationName; got != "Renamed Org" {
+			t.Fatalf("organization name = %q, want Renamed Org", got)
+		}
+	}
+}
+
 func TestExchangeAccountRefreshTokenMarksClaudeInvalidGrantPermanent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
