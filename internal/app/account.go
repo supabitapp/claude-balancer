@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	statepkg "github.com/supabitapp/claude-balancer/internal/state"
 )
 
 const (
@@ -369,12 +371,7 @@ func accessTokenDigest(token string) authorizationRevision {
 	return authorizationRevision(sha256.Sum256([]byte(token)))
 }
 
-func (c authClaims) key() string {
-	if c.Auth.AccountID == "" || c.OrganizationID == "" {
-		return c.Auth.AccountID
-	}
-	return c.Auth.AccountID + ":" + c.OrganizationID
-}
+func (c authClaims) key() string { return statepkg.AccountKey(c.Auth.AccountID, c.OrganizationID) }
 
 func (a *Account) id() string { return a.claims().key() }
 

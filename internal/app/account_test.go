@@ -41,9 +41,13 @@ func TestPoolKeepsOneAccountPerClaudeOrganization(t *testing.T) {
 	if got := pool.find("account:team").persisted().AccessToken; got != "third" {
 		t.Fatalf("team access token = %q, want the latest login", got)
 	}
-	labels := accountLabels(pool.all())
+	labels := accountLabels(pool.all(), label)
 	if labels["account:personal"] != "user@example.com (Personal)" || labels["account:team"] != "user@example.com (Team)" {
 		t.Fatalf("labels = %v", labels)
+	}
+	short := (dashboard{pool: pool}).shortNames()
+	if short["account:personal"] != "user (Personal)" || short["account:team"] != "user (Team)" {
+		t.Fatalf("short labels = %v", short)
 	}
 	if _, err := pool.resolve("user@example.com"); err == nil {
 		t.Fatal("shared email resolved to a single organization")

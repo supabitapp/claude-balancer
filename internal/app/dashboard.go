@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"embed"
 	"fmt"
@@ -420,14 +421,11 @@ func (s *server) dashboardAt(now time.Time, private bool) dashboardView {
 	names := make(map[string]string, len(stats.Accounts))
 	accounts := make([]dashboardAccountView, 0, len(stats.Accounts))
 	workspaces := make([]dashboardWorkspaceView, 0)
-	emails := map[string]int{}
-	for _, account := range stats.Accounts {
-		emails[strings.ToLower(account.privateEmail)]++
-	}
+	labels := accountLabels(s.pool.all(), label)
 	for i, account := range stats.Accounts {
 		name := account.Email
 		if private && account.privateEmail != "" {
-			name = organizationLabel(account.privateEmail, account.organization, emails[strings.ToLower(account.privateEmail)])
+			name = cmp.Or(labels[account.ID], account.privateEmail)
 		}
 		if name == "" {
 			name = "account " + strconv.Itoa(i+1)

@@ -16,7 +16,8 @@ func TestMigrateOrganizationAccountKeys(t *testing.T) {
 	}
 	db.SetMaxOpenConns(1)
 	defer db.Close()
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA application_id = %d; PRAGMA user_version = 9;", ApplicationID) + currentSchema); err != nil {
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA application_id = %d; PRAGMA user_version = 9;", ApplicationID) + currentSchema +
+		"DROP TRIGGER accounts_require_organization_key;"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO accounts
@@ -79,5 +80,16 @@ func TestMigrateOrganizationAccountKeys(t *testing.T) {
 	}
 	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("version = %d, error = %v", version, err)
+	}
+	_, err = store.MutateAccounts(func(current []Account) ([]Account, error) {
+		stale := current[0]
+		stale.ID = "a"
+		return []Account{current[1], current[2], stale}, nil
+	})
+	if err == nil {
+		t.Fatal("pre-organization writer replaced an organization-scoped account")
+	}
+	if accounts, err := store.ReadAccounts(); err != nil || len(accounts) != 3 || accounts[0].ID != "a:org" {
+		t.Fatalf("rejected writer changed accounts: %+v, error = %v", accounts, err)
 	}
 }

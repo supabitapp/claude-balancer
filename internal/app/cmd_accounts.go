@@ -145,7 +145,7 @@ func listAccounts(pool *Pool, asJSON bool) error {
 		fmt.Println("no accounts; add one with: claude-balancer accounts add")
 		return nil
 	}
-	names := accountLabels(accounts)
+	names := accountLabels(accounts, label)
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "EMAIL\tPLAN\tROUTING\tTOKEN")
 	for _, a := range accounts {

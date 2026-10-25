@@ -721,7 +721,6 @@ type accountStatsResponse struct {
 	ID                       string `json:"id"`
 	Email                    string `json:"email,omitempty"`
 	privateEmail             string
-	organization             string
 	Plan                     string                        `json:"plan"`
 	Subscription             *subscriptionStatsResponse    `json:"subscription,omitempty"`
 	Status                   accountStatus                 `json:"status"`
@@ -871,7 +870,6 @@ func (s *server) statsResponseAt(now time.Time, snapshot Snapshot) statsResponse
 			ID:                       candidate.id,
 			Email:                    maskEmail(claims.Email),
 			privateEmail:             claims.Email,
-			organization:             claims.OrganizationName,
 			Plan:                     plan,
 			Subscription:             subscriptionStats(claims, plan),
 			Status:                   status,
