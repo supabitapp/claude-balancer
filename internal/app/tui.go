@@ -432,21 +432,20 @@ func label(a *Account) string {
 }
 
 func accountLabels(accounts []*Account) map[string]string {
-	claims := make([]authClaims, len(accounts))
 	emails := map[string]int{}
-	for i, account := range accounts {
-		claims[i] = account.claims()
-		emails[strings.ToLower(claims[i].Email)]++
+	for _, account := range accounts {
+		emails[strings.ToLower(account.email())]++
 	}
 	out := make(map[string]string, len(accounts))
-	for _, c := range claims {
-		out[c.key()] = organizationLabel(cmp.Or(c.Email, c.key()), c.OrganizationName, emails[strings.ToLower(c.Email)])
+	for _, account := range accounts {
+		claims := account.claims()
+		out[claims.key()] = organizationLabel(label(account), claims.OrganizationName, emails[strings.ToLower(claims.Email)])
 	}
 	return out
 }
 
-func organizationLabel(name, organization string, sharedEmail int) string {
-	if sharedEmail < 2 || organization == "" {
+func organizationLabel(name, organization string, emailCount int) string {
+	if emailCount < 2 || organization == "" {
 		return name
 	}
 	return name + " (" + organization + ")"
