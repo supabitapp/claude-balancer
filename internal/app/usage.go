@@ -370,7 +370,7 @@ func (s *server) doAccountRequest(ctx context.Context, account *Account, method,
 		token := account.AccessToken
 		account.mu.Unlock()
 		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("anthropic-account-id", account.id())
+		req.Header.Set("anthropic-account-id", account.claims().Auth.AccountID)
 		if len(body) > 0 {
 			req.Header.Set("Content-Type", "application/json")
 		}

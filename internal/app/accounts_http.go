@@ -121,8 +121,10 @@ func (s *server) completeClaudeAccountLogin(ctx context.Context, flow *claudeOAu
 	if credentials == nil && err == nil {
 		err = errors.New("Claude sign-in returned no credentials")
 	}
+	var account *Account
 	if err == nil {
-		err = s.pool.add(accountFromClaudeCredentials(credentials))
+		account = accountFromClaudeCredentials(credentials)
+		err = s.pool.add(account)
 	}
 	if err != nil {
 		s.logins.finishClaude(flow, false)
@@ -133,7 +135,7 @@ func (s *server) completeClaudeAccountLogin(ctx context.Context, flow *claudeOAu
 	}
 	s.logins.finishClaude(flow, true)
 	if s.stats != nil {
-		s.stats.note("account added", credentials.AccountID, "")
+		s.stats.note("account added", account.id(), "")
 	}
 }
 

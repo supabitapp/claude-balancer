@@ -14,7 +14,7 @@ import (
 
 const (
 	ApplicationID = 0x434C4253
-	schemaVersion = 9
+	schemaVersion = 10
 )
 
 const currentSchema = `CREATE TABLE accounts (
@@ -248,6 +248,12 @@ func (s *Store) initialize() error {
 			return err
 		}
 		version = 9
+	}
+	if version == 9 {
+		if err := s.migrateOrganizationAccountKeys(); err != nil {
+			return err
+		}
+		version = 10
 	}
 	if version != schemaVersion {
 		return fmt.Errorf("state schema %d is unsupported; expected %d", version, schemaVersion)

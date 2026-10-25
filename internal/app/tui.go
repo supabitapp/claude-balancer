@@ -264,9 +264,10 @@ func (d dashboard) accounts(limit int) string {
 		trafficTurns += activityTotal(d.snap.Accounts[account.id()].Activity)
 	}
 
+	names := accountLabels(accounts)
 	nameW := 9
-	for _, a := range accounts {
-		nameW = max(nameW, lipgloss.Width(label(a)))
+	for _, name := range names {
+		nameW = max(nameW, lipgloss.Width(name))
 	}
 
 	gap := 1
@@ -385,9 +386,9 @@ func (d dashboard) accounts(limit int) string {
 			reset = styles.dim.Render(fit(short(next.Sub(now)), resetW))
 		}
 
-		marker, name := "  ", styles.text.Render(fit(label(a), nameW))
+		marker, name := "  ", styles.text.Render(fit(names[a.id()], nameW))
 		if start+i == cursor {
-			marker, name = styles.title.Render("▸ "), styles.title.Render(fit(label(a), nameW))
+			marker, name = styles.title.Render("▸ "), styles.title.Render(fit(names[a.id()], nameW))
 		}
 
 		rows = append(rows, marker+strings.Join([]string{
@@ -428,6 +429,27 @@ func formatPercent(value float64) string {
 
 func label(a *Account) string {
 	return cmp.Or(a.email(), a.id())
+}
+
+func accountLabels(accounts []*Account) map[string]string {
+	claims := make([]authClaims, len(accounts))
+	emails := map[string]int{}
+	for i, account := range accounts {
+		claims[i] = account.claims()
+		emails[strings.ToLower(claims[i].Email)]++
+	}
+	out := make(map[string]string, len(accounts))
+	for _, c := range claims {
+		out[c.key()] = organizationLabel(cmp.Or(c.Email, c.key()), c.OrganizationName, emails[strings.ToLower(c.Email)])
+	}
+	return out
+}
+
+func organizationLabel(name, organization string, sharedEmail int) string {
+	if sharedEmail < 2 || organization == "" {
+		return name
+	}
+	return name + " (" + organization + ")"
 }
 
 var sparkRunes = []rune("▁▂▃▄▅▆▇█")
@@ -676,11 +698,7 @@ func (d dashboard) shortNames() map[string]string {
 }
 
 func (d dashboard) accountNames() map[string]string {
-	out := map[string]string{}
-	for _, account := range d.pool.all() {
-		out[account.id()] = label(account)
-	}
-	return out
+	return accountLabels(d.pool.all())
 }
 
 func pad(s string, n int) string {

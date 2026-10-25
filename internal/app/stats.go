@@ -721,6 +721,7 @@ type accountStatsResponse struct {
 	ID                       string `json:"id"`
 	Email                    string `json:"email,omitempty"`
 	privateEmail             string
+	organization             string
 	Plan                     string                        `json:"plan"`
 	Subscription             *subscriptionStatsResponse    `json:"subscription,omitempty"`
 	Status                   accountStatus                 `json:"status"`
@@ -815,7 +816,7 @@ func (s *server) statsResponseAt(now time.Time, snapshot Snapshot) statsResponse
 		plan := account.plan()
 		candidate := account.routingCandidate()
 		primary, secondary := candidate.primary, candidate.secondary
-		traffic := snapshot.Accounts[claims.Auth.AccountID]
+		traffic := snapshot.Accounts[candidate.id]
 		weekly := longestWindow(primary, secondary)
 		var weeklyRemaining *float64
 		if remaining, known := remainingPercent(weekly); known {
@@ -852,7 +853,7 @@ func (s *server) statsResponseAt(now time.Time, snapshot Snapshot) statsResponse
 		var routedCredits *float64
 		var routedCreditsSince *time.Time
 		if start, known := creditCycleStart(now, primary, secondary); known {
-			if credits, since, known := s.stats.routedCreditsSince(claims.Auth.AccountID, start); known {
+			if credits, since, known := s.stats.routedCreditsSince(candidate.id, start); known {
 				routedCredits = &credits
 				routedCreditsSince = &since
 			}
@@ -867,9 +868,10 @@ func (s *server) statsResponseAt(now time.Time, snapshot Snapshot) statsResponse
 		}
 		spendControl := spendControlStats(candidate.spendControl)
 		out.Accounts = append(out.Accounts, accountStatsResponse{
-			ID:                       claims.Auth.AccountID,
+			ID:                       candidate.id,
 			Email:                    maskEmail(claims.Email),
 			privateEmail:             claims.Email,
+			organization:             claims.OrganizationName,
 			Plan:                     plan,
 			Subscription:             subscriptionStats(claims, plan),
 			Status:                   status,
