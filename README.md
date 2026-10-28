@@ -1,4 +1,6 @@
-# claude-balancer
+# claude-balancer 
+
+‼️ WARNING - Don't use it, it's against TOS, and I won't be responsible for ur accounts.
 
 <img width="2428" height="1122" alt="CleanShot 2026-10-15 at 23 49 01@2x" src="https://github.com/user-attachments/assets/34f61b6f-9512-41bf-9500-a355cab63065" />
 
@@ -7,11 +9,6 @@
 multiple authenticated accounts. It stores account state, route ownership, API
 keys, and usage history in SQLite. The dashboard uses server-rendered HTML with
 HTMX and keeps the existing visual style.
-
-The proxy preserves conversation affinity and only retries a request while the
-upstream work is still safe to replay. It supports streaming and non-streaming
-Messages API requests, count-tokens requests, model discovery, and
-speech-to-text dictation.
 
 ## Install
 
