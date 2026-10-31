@@ -936,10 +936,7 @@ func claudeStatusRejected(value string) bool {
 }
 
 func claudeSharedHealthy(headers http.Header, fiveHour, sevenDay string) bool {
-	if claudeStatusHealthy(fiveHour) && claudeStatusHealthy(sevenDay) {
-		return true
-	}
-	valid := 0
+	reported := false
 	for _, pair := range []struct {
 		status string
 		name   string
@@ -951,16 +948,20 @@ func claudeSharedHealthy(headers http.Header, fiveHour, sevenDay string) bool {
 			if !claudeStatusHealthy(pair.status) {
 				return false
 			}
-			valid++
+			reported = true
 			continue
 		}
-		value, err := strconv.ParseFloat(claudeHeaderValue(headers, pair.name), 64)
+		utilization := claudeHeaderValue(headers, pair.name)
+		if utilization == "" {
+			continue
+		}
+		value, err := strconv.ParseFloat(utilization, 64)
 		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value >= 1 {
 			return false
 		}
-		valid++
+		reported = true
 	}
-	return valid == 2
+	return reported
 }
 
 func claude429ScopeFor(headers http.Header, body []byte) claude429Scope {
