@@ -109,6 +109,26 @@ func TestClaudeRateLimitResetFallbacks(t *testing.T) {
 	}
 }
 
+func TestClaudeOverageRejectionWithoutFiveHourWindowKeepsAccountLive(t *testing.T) {
+	now := time.Now()
+	weeklyReset := strconv.FormatInt(now.Add(3*time.Hour).Unix(), 10)
+	account := testAccount("account-a", 39)
+	account.observeClaudeHeaders(http.Header{
+		"Anthropic-Ratelimit-Unified-Status":                  {"allowed"},
+		"Anthropic-Ratelimit-Unified-Representative-Claim":    {"seven_day"},
+		"Anthropic-Ratelimit-Unified-Reset":                   {weeklyReset},
+		"Anthropic-Ratelimit-Unified-7d-Status":               {"allowed"},
+		"Anthropic-Ratelimit-Unified-7d-Utilization":          {"0.39"},
+		"Anthropic-Ratelimit-Unified-7d-Reset":                {weeklyReset},
+		"Anthropic-Ratelimit-Unified-Overage-Status":          {"rejected"},
+		"Anthropic-Ratelimit-Unified-Overage-Disabled-Reason": {"org_level_disabled"},
+		"Anthropic-Ratelimit-Unified-Fallback-Percentage":     {"0.5"},
+	})
+	if got := account.status(now); got != accountLive {
+		t.Fatalf("status = %s, want live", got)
+	}
+}
+
 func TestClaudeFiveHourCooldownRecoversBeforeWeeklyReset(t *testing.T) {
 	now := time.Now()
 	fiveHourReset := now.Add(90 * time.Minute).Truncate(time.Second)
