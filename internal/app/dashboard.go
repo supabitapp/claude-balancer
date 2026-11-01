@@ -979,23 +979,3 @@ func dashboardNumber(value int64) string {
 	}
 	return strconv.FormatInt(value, 10)
 }
-
-func formatModelCosts(costs []ModelCostSnapshot) string {
-	lines := make([]string, 0, len(costs))
-	for _, cost := range costs {
-		model := cost.Model
-		if model == "" {
-			model = "unknown model"
-		}
-		price := formatAPIPrice(cost.APICostNanoDollars, cost.UnpricedResponses)
-		if cost.UnpricedResponses > 0 {
-			response := "responses"
-			if cost.UnpricedResponses == 1 {
-				response = "response"
-			}
-			price += fmt.Sprintf(" (%d unpriced %s)", cost.UnpricedResponses, response)
-		}
-		lines = append(lines, model+": "+price)
-	}
-	return strings.Join(lines, "\n")
-}

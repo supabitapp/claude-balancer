@@ -3,6 +3,7 @@ package app
 import (
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -72,21 +73,33 @@ func TestLastMonthCostsLoadFromStoreAndReprice(t *testing.T) {
 }
 
 func TestMonthRolloverKeepsOnlyThePreviousMonth(t *testing.T) {
-	stats := newStatsWithPrices(lastMonthTestPrices(t))
-	july := time.Date(2026, time.July, 31, 23, 59, 0, 0, time.UTC)
-	stats.syncUsageMonth(calendarMonth(july))
-	stats.applyUsageAt(july, "", "account", "claude-sonnet-test", "", "", responseUsage{InputTokens: 1_000})
-	stats.applyUsageAt(july.Add(time.Minute), "", "account", "claude-opus-test", "", "", responseUsage{InputTokens: 1_000})
+	synctest.Test(t, func(t *testing.T) {
+		nextMonth := func() { time.Sleep(time.Until(calendarMonthStart(time.Now()).AddDate(0, 1, 0))) }
+		stats := newStatsWithPrices(lastMonthTestPrices(t))
+		first := time.Now().Month()
+		stats.applyUsageAt(time.Now(), "", "account", "claude-sonnet-test", "", "", responseUsage{InputTokens: 1_000})
+		nextMonth()
+		second := time.Now().Month()
+		stats.applyUsageAt(time.Now(), "", "account", "claude-opus-test", "", "", responseUsage{InputTokens: 1_000})
 
-	if got := stats.lastMonth; got.month != calendarMonth(july) || got.cost != (usageCost{apiCostNanoDollars: 3_000_000}) || len(got.models) != 1 {
-		t.Fatalf("last month after rollover = %+v, want July's claude-sonnet-test cost", got)
-	}
-	if got := stats.month; got.cost != (usageCost{apiCostNanoDollars: 15_000_000}) || len(got.models) != 1 {
-		t.Fatalf("current month after rollover = %+v, want August's claude-opus-test cost", got)
-	}
+		snapshot := stats.snapshot()
+		if got := snapshot.LastMonth; got.Month != first || len(got.ModelCosts) != 1 || got.ModelCosts[0] != (ModelCostSnapshot{Model: "claude-sonnet-test", APICostNanoDollars: 3_000_000}) {
+			t.Fatalf("last month after usage rollover = %+v, want %s claude-sonnet-test cost", got, first)
+		}
+		if snapshot.APICostNanoDollars != 15_000_000 || len(snapshot.ModelCosts) != 1 {
+			t.Fatalf("current month = %d with models %+v, want claude-opus-test cost", snapshot.APICostNanoDollars, snapshot.ModelCosts)
+		}
 
-	stats.syncUsageMonth(calendarMonth(july) + 3)
-	if got := stats.lastMonth; got.month != calendarMonth(july)+2 || got.cost != (usageCost{}) || len(got.models) != 0 {
-		t.Fatalf("last month after idle months = %+v, want empty September", got)
-	}
+		nextMonth()
+		snapshot = stats.snapshot()
+		if got := snapshot.LastMonth; got.Month != second || got.APICostNanoDollars != 15_000_000 || snapshot.APICostNanoDollars != 0 {
+			t.Fatalf("after an idle month: last month = %+v, current = %d, want %s cost moved to last month", got, snapshot.APICostNanoDollars, second)
+		}
+
+		nextMonth()
+		nextMonth()
+		if got := stats.snapshot().LastMonth; got.APICostNanoDollars != 0 || len(got.ModelCosts) != 0 {
+			t.Fatalf("last month after two idle months = %+v, want empty", got)
+		}
+	})
 }
