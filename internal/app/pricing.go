@@ -180,6 +180,26 @@ func formatAPIPrice(nanoDollars int64, unpricedResponses int64) string {
 	return fmt.Sprintf("$%.2f", dollars)
 }
 
+func formatModelCosts(costs []ModelCostSnapshot) string {
+	lines := make([]string, 0, len(costs))
+	for _, cost := range costs {
+		model := cost.Model
+		if model == "" {
+			model = "unknown model"
+		}
+		price := formatAPIPrice(cost.APICostNanoDollars, cost.UnpricedResponses)
+		if cost.UnpricedResponses > 0 {
+			response := "responses"
+			if cost.UnpricedResponses == 1 {
+				response = "response"
+			}
+			price += fmt.Sprintf(" (%d unpriced %s)", cost.UnpricedResponses, response)
+		}
+		lines = append(lines, model+": "+price)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func formatTokenCount(tokens int64) string {
 	units := [...]string{"", "K", "M", "B", "T"}
 	value := float64(tokens)

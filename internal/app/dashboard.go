@@ -540,6 +540,9 @@ func (s *server) dashboardAt(now time.Time, private bool) dashboardView {
 	if modelCosts := formatModelCosts(snapshot.ModelCosts); modelCosts != "" {
 		priceInfo = modelCosts + "\n" + priceInfo
 	}
+	if lastMonth := snapshot.LastMonth; len(lastMonth.ModelCosts) > 0 {
+		priceInfo += "\n\n" + lastMonth.Month.String() + ": " + formatAPIPrice(lastMonth.APICostNanoDollars, lastMonth.UnpricedResponses) + "\n" + formatModelCosts(lastMonth.ModelCosts)
+	}
 	overview := []dashboardMetric{{Name: "active threads", Value: strconv.Itoa(len(snapshot.Threads))}}
 	overview = append(overview, dashboardResourceMetrics(s.resources.usage(now))...)
 	overview = append(overview,
@@ -975,24 +978,4 @@ func dashboardNumber(value int64) string {
 		return ""
 	}
 	return strconv.FormatInt(value, 10)
-}
-
-func formatModelCosts(costs []ModelCostSnapshot) string {
-	lines := make([]string, 0, len(costs))
-	for _, cost := range costs {
-		model := cost.Model
-		if model == "" {
-			model = "unknown model"
-		}
-		price := formatAPIPrice(cost.APICostNanoDollars, cost.UnpricedResponses)
-		if cost.UnpricedResponses > 0 {
-			response := "responses"
-			if cost.UnpricedResponses == 1 {
-				response = "response"
-			}
-			price += fmt.Sprintf(" (%d unpriced %s)", cost.UnpricedResponses, response)
-		}
-		lines = append(lines, model+": "+price)
-	}
-	return strings.Join(lines, "\n")
 }
