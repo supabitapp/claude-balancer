@@ -540,6 +540,9 @@ func (s *server) dashboardAt(now time.Time, private bool) dashboardView {
 	if modelCosts := formatModelCosts(snapshot.ModelCosts); modelCosts != "" {
 		priceInfo = modelCosts + "\n" + priceInfo
 	}
+	if lastMonth := snapshot.LastMonth; len(lastMonth.ModelCosts) > 0 {
+		priceInfo += "\n\n" + lastMonth.Month.String() + ": " + formatAPIPrice(lastMonth.APICostNanoDollars, lastMonth.UnpricedResponses) + "\n" + formatModelCosts(lastMonth.ModelCosts)
+	}
 	overview := []dashboardMetric{{Name: "active threads", Value: strconv.Itoa(len(snapshot.Threads))}}
 	overview = append(overview, dashboardResourceMetrics(s.resources.usage(now))...)
 	overview = append(overview,
