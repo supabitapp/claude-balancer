@@ -33,6 +33,7 @@ type server struct {
 	pool             *Pool
 	prices           *priceCatalog
 	stats            *Stats
+	apiKeyLedger     apiKeyLedger
 	logins           accountLoginStore
 	upstream         string
 	lookupAPIKey     func(string) (string, bool, error)
