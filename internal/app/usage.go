@@ -218,6 +218,21 @@ type resetCredit struct {
 	ExpiresAt  *time.Time `json:"ends_at"`
 	Paused     bool       `json:"paused"`
 	UsableNow  bool       `json:"usable_now"`
+	Type       string     `json:"type"`
+	FableOnly  bool       `json:"gives_back_weekly"`
+}
+
+func (c resetCredit) kind() string {
+	switch {
+	case c.FableOnly:
+		return "Fable"
+	case c.Type == "session":
+		return "5h"
+	case c.Type == "weekly":
+		return "weekly"
+	default:
+		return "all"
+	}
 }
 
 func (c resetCredit) available() bool {

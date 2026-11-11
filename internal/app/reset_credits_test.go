@@ -74,8 +74,10 @@ func useBankedReset(srv *server, account *Account, credit string) *httptest.Resp
 }
 
 const testResetGrants = `{"cedar_ember":{"eligible":true,"next_grant_id":"weekly_b","grants":[
-	{"id":"session_a","label":"5-hour reset","resets_left":2,"ends_at":"2099-01-02T00:00:00Z","usable_now":false},
-	{"id":"weekly_b","label":"Weekly reset","resets_left":1,"ends_at":"2099-01-01T00:00:00+00:00","usable_now":true},
+	{"id":"session_a","label":"5-hour reset","resets_left":2,"ends_at":"2099-01-02T00:00:00Z","usable_now":false,"type":"session"},
+	{"id":"weekly_b","label":"Weekly reset","resets_left":1,"ends_at":"2099-01-01T00:00:00+00:00","usable_now":true,"type":"full"},
+	{"id":"fable_d","label":"Fable reset","resets_left":1,"type":"full","gives_back_weekly":true},
+	{"id":"fable_e","label":"Second Fable reset","resets_left":1,"type":"full","gives_back_weekly":true},
 	{"id":"paused_c","label":"Paused reset","resets_left":4,"paused":true}
 ]}}`
 
@@ -96,8 +98,8 @@ func TestPollResetCreditsOffersTheNextUsableGrant(t *testing.T) {
 	}
 	now := time.Now()
 	stats := srv.currentStats(now).Accounts[0]
-	if stats.BankedResets == nil || *stats.BankedResets != 3 {
-		t.Fatalf("banked resets = %v, want 3", stats.BankedResets)
+	if stats.BankedResets == nil || *stats.BankedResets != 5 {
+		t.Fatalf("banked resets = %v, want 5", stats.BankedResets)
 	}
 	if info := dashboardResetInfo(now, stats.ResetCredits); !strings.Contains(info, "1 × Weekly reset. Expires in") || strings.Contains(info, "Paused") {
 		t.Fatalf("tooltip = %q", info)
@@ -106,7 +108,9 @@ func TestPollResetCreditsOffersTheNextUsableGrant(t *testing.T) {
 	srv.renderAdmin(page, httptest.NewRequest(http.MethodGet, "/admin", nil), adminSession{}, "", "", http.StatusOK)
 	body := page.Body.String()
 	weekly, session := strings.Index(body, `name="credit" value="weekly_b"`), strings.Index(body, `name="credit" value="session_a"`)
-	if weekly < 0 || session < weekly || strings.Contains(body, `value="paused_c"`) || !strings.Contains(body, `title="Weekly reset"`) {
+	if weekly < 0 || session < weekly || strings.Contains(body, `value="paused_c"`) || !strings.Contains(body, `title="Weekly reset"`) ||
+		!strings.Contains(body, ">reset all</button>") || !strings.Contains(body, ">reset 5h</button>") ||
+		strings.Count(body, ">reset Fable</button>") != 1 || strings.Contains(body, `value="fable_e"`) {
 		t.Fatalf("admin page reset buttons are wrong: %s", body)
 	}
 }
@@ -139,8 +143,8 @@ func TestAdminBankedResetRedeemsTheChosenGrant(t *testing.T) {
 	if len(claim) != 3 || claim["program"] != "cedar_ember" || claim["grant_id"] != "weekly_b" || claim["request_id"] == "" {
 		t.Fatalf("claim = %v", claim)
 	}
-	if stats := srv.currentStats(time.Now()).Accounts[0]; stats.BankedResets == nil || *stats.BankedResets != 2 {
-		t.Fatalf("banked resets after use = %v, want 2", stats.BankedResets)
+	if stats := srv.currentStats(time.Now()).Accounts[0]; stats.BankedResets == nil || *stats.BankedResets != 4 {
+		t.Fatalf("banked resets after use = %v, want 4", stats.BankedResets)
 	}
 	if cooldown, model := account.routingCandidate().cooldown, account.modelCooldownUntil("claude-opus-5-5"); !cooldown.IsZero() || !model.IsZero() {
 		t.Fatalf("cooldowns survived the reset: %v %v", cooldown, model)
