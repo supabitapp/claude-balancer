@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -772,6 +773,7 @@ type dashboardResetCreditView struct {
 	Account   string
 	ID        string
 	Label     string
+	Kind      string
 }
 
 func dashboardResetCredits(now time.Time, accountID, account string, credits []resetCreditStatsResponse) []dashboardResetCreditView {
@@ -780,11 +782,14 @@ func dashboardResetCredits(now time.Time, accountID, account string, credits []r
 		if credit.id == "" || (credit.ExpiresAt != nil && !credit.ExpiresAt.After(now)) {
 			continue
 		}
+		if slices.ContainsFunc(views, func(view dashboardResetCreditView) bool { return view.Kind == credit.Kind }) {
+			continue
+		}
 		label := credit.Label
 		if label == "" {
 			label = "Banked reset"
 		}
-		views = append(views, dashboardResetCreditView{AccountID: accountID, Account: account, ID: credit.id, Label: label})
+		views = append(views, dashboardResetCreditView{AccountID: accountID, Account: account, ID: credit.id, Label: label, Kind: credit.Kind})
 	}
 	return views
 }
