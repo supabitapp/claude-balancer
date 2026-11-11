@@ -441,30 +441,20 @@ func (s *server) adminBankedReset(w http.ResponseWriter, r *http.Request, sessio
 	defer account.resetMu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	notice, status := "Banked reset applied.", http.StatusOK
-	err := s.pollResetCredits(ctx, account)
-	if err == nil {
-		_, credits, _ := account.bankedResets()
-		held := slices.ContainsFunc(credits, func(credit resetCredit) bool {
-			return credit.ID == creditID && credit.usable(time.Now())
-		})
-		result := consumeResetCreditResponse{Result: "already_used"}
-		if held {
-			result, err = s.consumeResetCredit(ctx, account, creditID)
-		}
-		switch result.Result {
-		case "already_used", "ineligible":
-			notice, status = "That banked reset is no longer available.", http.StatusConflict
-		case "not_limited":
-			notice, status = "The account has not reached a limit this reset clears.", http.StatusConflict
-		case "cooldown":
-			notice, status = "Banked resets are cooling down for this account. Try again later.", http.StatusConflict
-		}
-	}
+	result, err := s.redeemBankedReset(ctx, account, creditID)
 	if err != nil {
 		s.log.Warn("admin banked reset failed", "account", account.id(), "error", err)
 		s.renderAdmin(w, r, session, "Could not confirm the banked reset. Check the account's limits before trying again.", "", http.StatusBadGateway)
 		return
+	}
+	notice, status := "Banked reset applied.", http.StatusOK
+	switch result {
+	case "already_used", "ineligible":
+		notice, status = "That banked reset is no longer available.", http.StatusConflict
+	case "not_limited":
+		notice, status = "The account has not reached a limit this reset clears.", http.StatusConflict
+	case "cooldown":
+		notice, status = "Banked resets are cooling down for this account. Try again later.", http.StatusConflict
 	}
 	s.stats.note("admin account reset", account.id(), notice)
 	usageErr := s.pollUsage(ctx, account)
@@ -473,4 +463,19 @@ func (s *server) adminBankedReset(w http.ResponseWriter, r *http.Request, sessio
 		notice += " Could not refresh account data; it will update on the next successful poll."
 	}
 	s.renderAdmin(w, r, session, notice, "", status)
+}
+
+func (s *server) redeemBankedReset(ctx context.Context, account *Account, creditID string) (string, error) {
+	if err := s.pollResetCredits(ctx, account); err != nil {
+		return "", err
+	}
+	_, credits, _ := account.bankedResets()
+	held := slices.ContainsFunc(credits, func(credit resetCredit) bool {
+		return credit.ID == creditID && credit.usable(time.Now())
+	})
+	if !held {
+		return "already_used", nil
+	}
+	result, err := s.consumeResetCredit(ctx, account, creditID)
+	return result.Result, err
 }
