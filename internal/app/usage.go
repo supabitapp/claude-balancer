@@ -3,18 +3,26 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
 
-var accountAPIBaseURL = "https://api.anthropic.com/api/oauth"
+var (
+	accountAPIBaseURL      = "https://api.anthropic.com/api/oauth"
+	organizationAPIBaseURL = "https://api.anthropic.com/api/organizations"
+)
 
 const (
+	resetCreditProgram           = "cedar_ember"
+	claudeOAuthBeta              = "oauth-2025-04-20"
 	urgentUsageRefreshInterval   = 2 * time.Minute
 	accountDetailRefreshInterval = time.Hour
 )
@@ -192,31 +200,40 @@ type usageWindow struct {
 }
 
 type resetCreditsPayload struct {
-	Credits        []resetCredit `json:"credits"`
-	AvailableCount int64         `json:"available_count"`
+	Program *struct {
+		Eligible         bool          `json:"eligible"`
+		IneligibleReason string        `json:"ineligible_reason"`
+		Grants           []resetCredit `json:"grants"`
+		NextGrantID      string        `json:"next_grant_id"`
+	} `json:"cedar_ember"`
 }
 
 type resetCredit struct {
-	ID          string     `json:"id"`
-	ResetType   string     `json:"reset_type"`
-	Status      string     `json:"status"`
-	ExpiresAt   *time.Time `json:"expires_at"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
+	ID         string     `json:"id"`
+	Label      string     `json:"label"`
+	ResetsLeft int64      `json:"resets_left"`
+	ExpiresAt  *time.Time `json:"ends_at"`
+	Paused     bool       `json:"paused"`
+	UsableNow  bool       `json:"usable_now"`
 }
 
 func (c resetCredit) available() bool {
-	return c.ResetType == "claude_rate_limits" && c.Status == "available"
+	return !c.Paused && (c.ResetsLeft > 0 || c.UsableNow)
+}
+
+func (c resetCredit) usable(now time.Time) bool {
+	return c.available() && (c.ExpiresAt == nil || c.ExpiresAt.After(now))
 }
 
 type consumeResetCreditRequest struct {
-	RedeemRequestID string `json:"redeem_request_id"`
-	CreditID        string `json:"credit_id"`
+	Program   string `json:"program"`
+	GrantID   string `json:"grant_id"`
+	RequestID string `json:"request_id"`
 }
 
 type consumeResetCreditResponse struct {
-	Code         string `json:"code"`
-	WindowsReset int64  `json:"windows_reset"`
+	Result string `json:"result"`
+	Reason string `json:"reason"`
 }
 
 func (u usageWindow) window(fetchedAt time.Time) window {
@@ -332,15 +349,11 @@ func (s *server) persistClaudePlan(ctx context.Context, account *Account, plan s
 }
 
 func (s *server) pollResetCredits(ctx context.Context, account *Account) error {
-	resp, err := s.doAccountRequest(ctx, account, http.MethodGet, accountAPIBaseURL+"/rate-limit-reset-credits", nil)
+	resp, err := s.doAccountRequest(ctx, account, http.MethodGet, accountAPIBaseURL+"/usage?"+resetCreditProgram+"=1&skip_spend=1", nil)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		account.markResetCreditsUnavailable(time.Now())
-		return nil
-	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("reset credits returned %s", resp.Status)
 	}
@@ -349,7 +362,27 @@ func (s *server) pollResetCredits(ctx context.Context, account *Account) error {
 		return err
 	}
 	fetchedAt := time.Now()
-	account.adoptResetCredits(fetchedAt, payload.AvailableCount, payload.Credits)
+	program := payload.Program
+	if program == nil || !program.Eligible {
+		account.markResetCreditsUnavailable(fetchedAt)
+		reason := "absent"
+		if program != nil {
+			reason = program.IneligibleReason
+		}
+		s.log.Debug("reset credits unavailable", "account", account.id(), "reason", reason)
+		return nil
+	}
+	if next := slices.IndexFunc(program.Grants, func(grant resetCredit) bool { return grant.ID == program.NextGrantID }); next > 0 {
+		program.Grants[0], program.Grants[next] = program.Grants[next], program.Grants[0]
+	}
+	var count int64
+	for _, grant := range program.Grants {
+		if !grant.Paused {
+			count += grant.ResetsLeft
+		}
+	}
+	account.adoptResetCredits(fetchedAt, count, program.Grants)
+	s.log.Debug("reset credits polled", "account", account.id(), "grants", len(program.Grants), "banked_resets", count)
 	return nil
 }
 
@@ -371,6 +404,7 @@ func (s *server) doAccountRequest(ctx context.Context, account *Account, method,
 		account.mu.Unlock()
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("anthropic-account-id", account.claims().Auth.AccountID)
+		req.Header.Set("anthropic-beta", claudeOAuthBeta)
 		if len(body) > 0 {
 			req.Header.Set("Content-Type", "application/json")
 		}
@@ -389,22 +423,15 @@ func (s *server) doAccountRequest(ctx context.Context, account *Account, method,
 	}
 }
 
-// A zero lead allows any unexpired credit, with undated credits ordered last.
-func nextResetCredit(credits []resetCredit, now time.Time, lead time.Duration) (resetCredit, bool) {
-	deadline := now.Add(lead)
+func expiringResetCredit(credits []resetCredit, now time.Time) (resetCredit, bool) {
+	deadline := now.Add(resetPriorityLead)
 	var next resetCredit
 	found := false
 	for _, credit := range credits {
-		if !credit.available() {
+		if !credit.usable(now) || credit.ExpiresAt == nil || credit.ExpiresAt.After(deadline) {
 			continue
 		}
-		if credit.ExpiresAt != nil && !credit.ExpiresAt.After(now) {
-			continue
-		}
-		if lead > 0 && (credit.ExpiresAt == nil || credit.ExpiresAt.After(deadline)) {
-			continue
-		}
-		if !found || resetCreditExpiresBefore(credit, next) {
+		if !found || credit.ExpiresAt.Before(*next.ExpiresAt) {
 			next = credit
 			found = true
 		}
@@ -412,60 +439,37 @@ func nextResetCredit(credits []resetCredit, now time.Time, lead time.Duration) (
 	return next, found
 }
 
-func resetCreditExpiresBefore(credit, other resetCredit) bool {
-	return credit.ExpiresAt != nil && (other.ExpiresAt == nil || credit.ExpiresAt.Before(*other.ExpiresAt))
-}
-
-func expiringResetCredit(credits []resetCredit, now time.Time) (resetCredit, bool) {
-	return nextResetCredit(credits, now, resetPriorityLead)
-}
-
-func (s *server) consumeResetCredit(ctx context.Context, account *Account, choose func([]resetCredit) (resetCredit, bool)) (consumeResetCreditResponse, string, error) {
-	resp, err := s.doAccountRequest(ctx, account, http.MethodGet, accountAPIBaseURL+"/rate-limit-reset-credits", nil)
-	if err != nil {
-		return consumeResetCreditResponse{}, "", err
+func (s *server) consumeResetCredit(ctx context.Context, account *Account, creditID string) (consumeResetCreditResponse, error) {
+	organization := account.claims().OrganizationID
+	if organization == "" {
+		return consumeResetCreditResponse{}, fmt.Errorf("account %s has no organization", account.id())
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		return consumeResetCreditResponse{}, "", fmt.Errorf("reset credits returned %s", resp.Status)
-	}
-
-	var payload resetCreditsPayload
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return consumeResetCreditResponse{}, "", err
-	}
-	fetchedAt := time.Now()
-	account.adoptResetCredits(fetchedAt, payload.AvailableCount, payload.Credits)
-	credit, ok := choose(payload.Credits)
-	if !ok {
-		return consumeResetCreditResponse{}, "", nil
-	}
-
 	body, err := json.Marshal(consumeResetCreditRequest{
-		RedeemRequestID: credit.ID,
-		CreditID:        credit.ID,
+		Program:   resetCreditProgram,
+		GrantID:   creditID,
+		RequestID: rand.Text(),
 	})
 	if err != nil {
-		return consumeResetCreditResponse{}, credit.ID, err
+		return consumeResetCreditResponse{}, err
 	}
-	resp, err = s.doAccountRequest(ctx, account, http.MethodPost, accountAPIBaseURL+"/rate-limit-reset-credits/consume", body)
+	endpoint := organizationAPIBaseURL + "/" + url.PathEscape(organization) + "/reset_rate_limits"
+	resp, err := s.doAccountRequest(ctx, account, http.MethodPost, endpoint, body)
 	if err != nil {
-		return consumeResetCreditResponse{}, credit.ID, err
+		return consumeResetCreditResponse{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return consumeResetCreditResponse{}, credit.ID, fmt.Errorf("reset credit consume returned %s", resp.Status)
+		return consumeResetCreditResponse{}, fmt.Errorf("reset credit consume returned %s", resp.Status)
 	}
-
 	var result consumeResetCreditResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return consumeResetCreditResponse{}, credit.ID, err
+		return consumeResetCreditResponse{}, err
 	}
-	switch result.Code {
-	case "reset", "nothing_to_reset", "no_credit", "already_redeemed":
-		return result, credit.ID, nil
+	switch result.Result {
+	case "reset", "already_used", "not_limited", "cooldown", "ineligible":
+		return result, nil
 	default:
-		return consumeResetCreditResponse{}, credit.ID, fmt.Errorf("reset credit consume returned code %q", result.Code)
+		return consumeResetCreditResponse{}, fmt.Errorf("reset credit consume returned result %q reason %q", result.Result, result.Reason)
 	}
 }
 

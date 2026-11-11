@@ -874,13 +874,17 @@ func dashboardLatencyInfo(ttfb, total time.Duration) string {
 func dashboardResetInfo(now time.Time, credits []resetCreditStatsResponse) string {
 	lines := make([]string, 0, len(credits))
 	for _, credit := range credits {
-		if credit.ExpiresAt == nil {
-			lines = append(lines, "Does not expire")
-		} else if credit.ExpiresAt.After(now) {
-			lines = append(lines, "Expires in "+short(credit.ExpiresAt.Sub(now))+" at "+credit.ExpiresAt.UTC().Format("2006-01-02 15:04 UTC"))
-		} else {
-			lines = append(lines, "Expired at "+credit.ExpiresAt.UTC().Format("2006-01-02 15:04 UTC"))
+		line := "Does not expire"
+		if credit.ExpiresAt != nil {
+			line = "Expired at " + credit.ExpiresAt.UTC().Format("2006-01-02 15:04 UTC")
+			if credit.ExpiresAt.After(now) {
+				line = "Expires in " + short(credit.ExpiresAt.Sub(now)) + " at " + credit.ExpiresAt.UTC().Format("2006-01-02 15:04 UTC")
+			}
 		}
+		if credit.Label != "" {
+			line = fmt.Sprintf("%d × %s. %s", credit.ResetsLeft, credit.Label, line)
+		}
+		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
 }

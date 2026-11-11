@@ -150,15 +150,6 @@ func testAccountWithPlan(id string, used float64, plan string) *Account {
 	return account
 }
 
-func adoptTestResetCredit(account *Account, expiresAt time.Time) {
-	account.adoptResetCredits(time.Now(), 1, []resetCredit{{
-		ID:        "credit-" + account.id(),
-		ResetType: "claude_rate_limits",
-		Status:    "available",
-		ExpiresAt: &expiresAt,
-	}})
-}
-
 func setTestAccountUsage(account *Account, used float64) {
 	account.mu.Lock()
 	defer account.mu.Unlock()
