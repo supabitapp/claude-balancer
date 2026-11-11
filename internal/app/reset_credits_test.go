@@ -20,7 +20,7 @@ type resetCreditUpstream struct {
 }
 
 func (u *resetCreditUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("anthropic-beta") != "oauth-2025-04-20" || !strings.HasPrefix(r.UserAgent(), "claude-cli/") {
+	if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("anthropic-beta") != "oauth-2025-04-20" || !strings.HasPrefix(r.UserAgent(), "claude-cli/") || !strings.HasSuffix(r.UserAgent(), " (external, cli)") {
 		u.t.Errorf("unexpected credentials on %s %s", r.Method, r.URL)
 	}
 	switch {
@@ -82,9 +82,15 @@ const testResetGrants = `{"cedar_ember":{"eligible":true,"next_grant_id":"weekly
 func TestPollResetCreditsOffersTheNextUsableGrant(t *testing.T) {
 	upstream := &resetCreditUpstream{grants: testResetGrants}
 	srv, account := newResetCreditServer(t, upstream)
-	if err := srv.pollResetCredits(t.Context(), account); err != nil {
-		t.Fatal(err)
+	for _, userAgent := range []string{"claude-cli/9.9.9 (external, sdk-ts)", "claude-cli/9.9.9 (external, cli)"} {
+		request := httptest.NewRequest(http.MethodGet, "/v1/messages", nil)
+		request.Header.Set("User-Agent", userAgent)
+		srv.claudeMessagesHTTP(httptest.NewRecorder(), request)
+		if err := srv.pollResetCredits(t.Context(), account); err != nil {
+			t.Fatal(err)
+		}
 	}
+	upstream.polling = upstream.polling[1:]
 	if len(upstream.polling) != 1 || upstream.polling[0] != "cedar_ember=1&skip_spend=1" {
 		t.Fatalf("poll queries = %q", upstream.polling)
 	}

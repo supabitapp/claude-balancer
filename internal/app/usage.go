@@ -24,7 +24,8 @@ const (
 	resetCreditClaimRetryWindow  = 10 * time.Minute
 	claudeOAuthBeta              = "oauth-2025-04-20"
 	claudeCLIUserAgentPrefix     = "claude-cli/"
-	claudeCLIUserAgentFallback   = claudeCLIUserAgentPrefix + "2.1.322 (external, cli)"
+	claudeCLIUserAgentSuffix     = " (external, cli)"
+	claudeCLIUserAgentFallback   = claudeCLIUserAgentPrefix + "2.1.322" + claudeCLIUserAgentSuffix
 	urgentUsageRefreshInterval   = 2 * time.Minute
 	accountDetailRefreshInterval = time.Hour
 )
