@@ -5,6 +5,11 @@ client addresses, API key names, conversation identifiers, and event metadata.
 The hidden route has no link from the public dashboard. Adding an account uses
 the `/accounts` sign-in flow.
 
+The Reset credits column shows each account's banked limit resets. When an
+account holds any, the admin dashboard adds a `use` button for each one that
+redeems it after a confirmation naming the reset. Claude refuses a reset the account cannot use
+yet, and the dashboard reports that refusal without spending the reset.
+
 ## Set or reset the password
 
 Run this on the server:

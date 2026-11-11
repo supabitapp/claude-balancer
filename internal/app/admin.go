@@ -3,8 +3,10 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -440,34 +442,52 @@ func (s *server) adminBankedReset(w http.ResponseWriter, r *http.Request, sessio
 	defer account.resetMu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	result, selected, err := s.consumeResetCredit(ctx, account, func(credits []resetCredit) (resetCredit, bool) {
-		for _, credit := range credits {
-			if credit.ID == creditID && credit.available() && (credit.ExpiresAt == nil || credit.ExpiresAt.After(time.Now())) {
-				return credit, true
-			}
-		}
-		return resetCredit{}, false
-	})
+	result, err := s.redeemBankedReset(ctx, account, creditID)
 	if err != nil {
 		s.log.Warn("admin banked reset failed", "account", account.id(), "error", err)
-		s.renderAdmin(w, r, session, "Could not confirm the banked reset. Refresh before trying again.", "", http.StatusBadGateway)
+		s.renderAdmin(w, r, session, "Could not confirm the banked reset. Check the account's limits before trying again.", "", http.StatusBadGateway)
 		return
 	}
 	notice, status := "Banked reset applied.", http.StatusOK
-	switch {
-	case selected == "", result.Code == "no_credit", result.Code == "already_redeemed":
+	switch result {
+	case "already_used", "ineligible":
 		notice, status = "That banked reset is no longer available.", http.StatusConflict
-	case result.Code == "nothing_to_reset":
-		notice = "The account has no rate limits to reset."
+	case "not_limited":
+		notice, status = "The account has not reached a limit this reset clears.", http.StatusConflict
+	case "cooldown":
+		notice, status = "Banked resets are cooling down for this account. Try again later.", http.StatusConflict
 	}
 	s.stats.note("admin account reset", account.id(), notice)
-	if result.Code == "reset" {
-		timer := time.NewTimer(3 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-		}
+	usageErr := s.pollUsage(ctx, account)
+	creditsErr := s.pollResetCredits(ctx, account)
+	if usageErr != nil || creditsErr != nil {
+		notice += " Could not refresh account data; it will update on the next successful poll."
 	}
 	s.renderAdmin(w, r, session, notice, "", status)
+}
+
+func (s *server) redeemBankedReset(ctx context.Context, account *Account, creditID string) (string, error) {
+	if err := s.pollResetCredits(ctx, account); err != nil {
+		return "", err
+	}
+	_, credits, _ := account.bankedResets()
+	held := slices.ContainsFunc(credits, func(credit resetCredit) bool {
+		return credit.ID == creditID && credit.usable(time.Now())
+	})
+	if !held {
+		return "already_used", nil
+	}
+	now := time.Now()
+	if account.resetClaim.creditID != creditID || now.Sub(account.resetClaim.startedAt) >= resetCreditClaimRetryWindow {
+		account.resetClaim = resetCreditClaim{creditID: creditID, requestID: rand.Text(), startedAt: now}
+	}
+	result, err := s.consumeResetCredit(ctx, account, creditID, account.resetClaim.requestID)
+	if err != nil {
+		return "", err
+	}
+	account.resetClaim = resetCreditClaim{}
+	if result.Result == "reset" {
+		account.clearLimitCooldowns()
+	}
+	return result.Result, nil
 }

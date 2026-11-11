@@ -276,6 +276,9 @@ func claudeBodyForAccount(body []byte, account *Account, route claudeRoute) []by
 // accounts. It retries only before any upstream response bytes are sent and
 // only for statuses that are safe to replay (rate limits and transient 5xx).
 func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
+	if userAgent := r.UserAgent(); strings.HasPrefix(userAgent, claudeCLIUserAgentPrefix) {
+		s.clientUserAgent.Store(&userAgent)
+	}
 	apiKey, ok := s.authorizeAPIKey(r)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "missing or invalid bearer key")

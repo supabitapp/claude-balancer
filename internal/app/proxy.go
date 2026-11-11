@@ -47,6 +47,7 @@ type server struct {
 	dashboardStreams atomic.Int64
 	dashboardUpdates dashboardBroadcaster
 	refreshes        refreshOperations
+	clientUserAgent  atomic.Pointer[string]
 }
 
 func (s *server) routes() http.Handler {

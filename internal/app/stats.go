@@ -808,8 +808,10 @@ type routingPriorityStatsResponse struct {
 }
 
 type resetCreditStatsResponse struct {
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	id        string
+	Label      string     `json:"label,omitempty"`
+	ResetsLeft int64      `json:"resets_left"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	id         string
 }
 
 func (s *server) statsJSON(w http.ResponseWriter, _ *http.Request) {
@@ -862,8 +864,10 @@ func (s *server) statsResponseAt(now time.Time, snapshot Snapshot) statsResponse
 					continue
 				}
 				resetCredits = append(resetCredits, resetCreditStatsResponse{
-					ExpiresAt: credit.ExpiresAt,
-					id:        credit.ID,
+					Label:      credit.Label,
+					ResetsLeft: credit.ResetsLeft,
+					ExpiresAt:  credit.ExpiresAt,
+					id:         credit.ID,
 				})
 			}
 		}
