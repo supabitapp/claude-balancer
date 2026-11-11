@@ -39,6 +39,7 @@ type Account struct {
 	accountState
 	mu                  sync.Mutex
 	resetMu             sync.Mutex
+	resetClaim          resetCreditClaim
 	inflight            *accountRefresh
 	rejectedAccessToken authorizationRevision
 
@@ -60,6 +61,12 @@ type Account struct {
 }
 
 type authorizationRevision [sha256.Size]byte
+
+type resetCreditClaim struct {
+	creditID  string
+	requestID string
+	startedAt time.Time
+}
 
 type resetCreditState struct {
 	fetchedAt time.Time

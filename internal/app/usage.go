@@ -3,7 +3,6 @@ package app
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -22,6 +21,7 @@ var (
 
 const (
 	resetCreditProgram           = "cedar_ember"
+	resetCreditClaimRetryWindow  = 10 * time.Minute
 	claudeOAuthBeta              = "oauth-2025-04-20"
 	urgentUsageRefreshInterval   = 2 * time.Minute
 	accountDetailRefreshInterval = time.Hour
@@ -439,7 +439,7 @@ func expiringResetCredit(credits []resetCredit, now time.Time) (resetCredit, boo
 	return next, found
 }
 
-func (s *server) consumeResetCredit(ctx context.Context, account *Account, creditID string) (consumeResetCreditResponse, error) {
+func (s *server) consumeResetCredit(ctx context.Context, account *Account, creditID, requestID string) (consumeResetCreditResponse, error) {
 	organization := account.claims().OrganizationID
 	if organization == "" {
 		return consumeResetCreditResponse{}, fmt.Errorf("account %s has no organization", account.id())
@@ -447,7 +447,7 @@ func (s *server) consumeResetCredit(ctx context.Context, account *Account, credi
 	body, err := json.Marshal(consumeResetCreditRequest{
 		Program:   resetCreditProgram,
 		GrantID:   creditID,
-		RequestID: rand.Text(),
+		RequestID: requestID,
 	})
 	if err != nil {
 		return consumeResetCreditResponse{}, err
@@ -518,6 +518,14 @@ func (a *Account) adoptResetCredits(fetchedAt time.Time, count int64, credits []
 		count:     count,
 		details:   append([]resetCredit(nil), credits...),
 	}
+}
+
+func (a *Account) clearLimitCooldowns() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cooldown = time.Time{}
+	a.modelCooldown = nil
+	a.modelCooldownAttempts = nil
 }
 
 func (a *Account) markResetCreditsUnavailable(fetchedAt time.Time) {

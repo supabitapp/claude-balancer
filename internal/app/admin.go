@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"net/http"
 	"slices"
@@ -476,6 +477,17 @@ func (s *server) redeemBankedReset(ctx context.Context, account *Account, credit
 	if !held {
 		return "already_used", nil
 	}
-	result, err := s.consumeResetCredit(ctx, account, creditID)
-	return result.Result, err
+	now := time.Now()
+	if account.resetClaim.creditID != creditID || now.Sub(account.resetClaim.startedAt) >= resetCreditClaimRetryWindow {
+		account.resetClaim = resetCreditClaim{creditID: creditID, requestID: rand.Text(), startedAt: now}
+	}
+	result, err := s.consumeResetCredit(ctx, account, creditID, account.resetClaim.requestID)
+	if err != nil {
+		return "", err
+	}
+	account.resetClaim = resetCreditClaim{}
+	if result.Result == "reset" {
+		account.clearLimitCooldowns()
+	}
+	return result.Result, nil
 }

@@ -35,7 +35,9 @@ func (u *resetCreditUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			u.t.Error(err)
 		}
 		u.claims = append(u.claims, claim)
-		u.grants = `{"cedar_ember":{"eligible":true,"grants":[]}}`
+		if strings.Contains(u.result, `"reset"`) {
+			u.grants = strings.Replace(u.grants, `"id":"weekly_b","label":"Weekly reset","resets_left":1`, `"id":"weekly_b","label":"Weekly reset","resets_left":0`, 1)
+		}
 		io.WriteString(w, u.result)
 	default:
 		u.t.Errorf("unexpected request %s %s", r.Method, r.URL)
@@ -119,6 +121,8 @@ func TestPollResetCreditsHidesIneligibleAccounts(t *testing.T) {
 func TestAdminBankedResetRedeemsTheChosenGrant(t *testing.T) {
 	upstream := &resetCreditUpstream{grants: testResetGrants, result: `{"result":"reset","resets_left":0}`}
 	srv, account := newResetCreditServer(t, upstream)
+	account.extendCooldown(time.Now().Add(time.Hour))
+	account.coolModel("claude-opus-5-5", http.Header{})
 	recorder := useBankedReset(srv, account, "weekly_b")
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Banked reset applied.") {
 		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
@@ -130,8 +134,31 @@ func TestAdminBankedResetRedeemsTheChosenGrant(t *testing.T) {
 	if claim.Program != "cedar_ember" || claim.GrantID != "weekly_b" || claim.RequestID == "" {
 		t.Fatalf("claim = %+v", claim)
 	}
-	if stats := srv.currentStats(time.Now()).Accounts[0]; stats.BankedResets == nil || *stats.BankedResets != 0 {
-		t.Fatalf("banked resets after use = %v, want 0", stats.BankedResets)
+	if stats := srv.currentStats(time.Now()).Accounts[0]; stats.BankedResets == nil || *stats.BankedResets != 2 {
+		t.Fatalf("banked resets after use = %v, want 2", stats.BankedResets)
+	}
+	if cooldown, model := account.routingCandidate().cooldown, account.modelCooldownUntil("claude-opus-5-5"); !cooldown.IsZero() || !model.IsZero() {
+		t.Fatalf("cooldowns survived the reset: %v %v", cooldown, model)
+	}
+}
+
+func TestAdminBankedResetRetriesAnUnconfirmedClaimWithTheSameRequest(t *testing.T) {
+	upstream := &resetCreditUpstream{grants: testResetGrants, result: `{"result":"unavailable"}`}
+	srv, account := newResetCreditServer(t, upstream)
+	if recorder := useBankedReset(srv, account, "session_a"); recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	upstream.result = `{"result":"reset"}`
+	useBankedReset(srv, account, "session_a")
+	useBankedReset(srv, account, "session_a")
+	if len(upstream.claims) != 3 {
+		t.Fatalf("claims = %d, want 3", len(upstream.claims))
+	}
+	if upstream.claims[0].RequestID != upstream.claims[1].RequestID {
+		t.Fatal("retry of an unconfirmed claim used a new request id")
+	}
+	if upstream.claims[1].RequestID == upstream.claims[2].RequestID {
+		t.Fatal("a new claim reused a settled request id")
 	}
 }
 
