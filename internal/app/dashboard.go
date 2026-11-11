@@ -70,7 +70,7 @@ type dashboardAccountView struct {
 	DOMID           string
 	ID              string
 	Mode            routingMode
-	ResetCreditID   string
+	ResetCredits    []dashboardResetCreditView
 	Name            string
 	Plan            string
 	PlanInfo        string
@@ -486,7 +486,7 @@ func (s *server) dashboardAt(now time.Time, private bool) dashboardView {
 		if private {
 			view.ID = account.ID
 			view.Mode = account.RoutingMode
-			view.ResetCreditID = dashboardResetCreditID(now, account.ResetCredits)
+			view.ResetCredits = dashboardResetCredits(now, account.ID, view.Name, account.ResetCredits)
 		}
 		accounts = append(accounts, view)
 	}
@@ -767,13 +767,26 @@ func privateDashboardThreadInfo(thread ThreadSnapshot) string {
 	return strings.Join(lines, "\n")
 }
 
-func dashboardResetCreditID(now time.Time, credits []resetCreditStatsResponse) string {
+type dashboardResetCreditView struct {
+	AccountID string
+	Account   string
+	ID        string
+	Label     string
+}
+
+func dashboardResetCredits(now time.Time, accountID, account string, credits []resetCreditStatsResponse) []dashboardResetCreditView {
+	var views []dashboardResetCreditView
 	for _, credit := range credits {
-		if credit.id != "" && (credit.ExpiresAt == nil || credit.ExpiresAt.After(now)) {
-			return credit.id
+		if credit.id == "" || (credit.ExpiresAt != nil && !credit.ExpiresAt.After(now)) {
+			continue
 		}
+		label := credit.Label
+		if label == "" {
+			label = "Banked reset"
+		}
+		views = append(views, dashboardResetCreditView{AccountID: accountID, Account: account, ID: credit.id, Label: label})
 	}
-	return ""
+	return views
 }
 
 func dashboardThreadModel(thread ThreadSnapshot) (string, string) {

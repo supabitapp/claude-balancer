@@ -23,6 +23,8 @@ const (
 	resetCreditProgram           = "cedar_ember"
 	resetCreditClaimRetryWindow  = 10 * time.Minute
 	claudeOAuthBeta              = "oauth-2025-04-20"
+	claudeCLIUserAgentPrefix     = "claude-cli/"
+	claudeCLIUserAgentFallback   = claudeCLIUserAgentPrefix + "2.1.322 (external, cli)"
 	urgentUsageRefreshInterval   = 2 * time.Minute
 	accountDetailRefreshInterval = time.Hour
 )
@@ -405,6 +407,11 @@ func (s *server) doAccountRequest(ctx context.Context, account *Account, method,
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("anthropic-account-id", account.claims().Auth.AccountID)
 		req.Header.Set("anthropic-beta", claudeOAuthBeta)
+		userAgent := claudeCLIUserAgentFallback
+		if seen := s.clientUserAgent.Load(); seen != nil {
+			userAgent = *seen
+		}
+		req.Header.Set("User-Agent", userAgent)
 		if len(body) > 0 {
 			req.Header.Set("Content-Type", "application/json")
 		}

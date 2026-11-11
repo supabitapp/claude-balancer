@@ -20,7 +20,7 @@ type resetCreditUpstream struct {
 }
 
 func (u *resetCreditUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("anthropic-beta") != claudeOAuthBeta {
+	if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("anthropic-beta") != "oauth-2025-04-20" || !strings.HasPrefix(r.UserAgent(), "claude-cli/") {
 		u.t.Errorf("unexpected credentials on %s %s", r.Method, r.URL)
 	}
 	switch {
@@ -93,16 +93,15 @@ func TestPollResetCreditsOffersTheNextUsableGrant(t *testing.T) {
 	if stats.BankedResets == nil || *stats.BankedResets != 3 {
 		t.Fatalf("banked resets = %v, want 3", stats.BankedResets)
 	}
-	if got := dashboardResetCreditID(now, stats.ResetCredits); got != "weekly_b" {
-		t.Fatalf("offered grant = %q, want weekly_b", got)
-	}
 	if info := dashboardResetInfo(now, stats.ResetCredits); !strings.Contains(info, "1 × Weekly reset. Expires in") || strings.Contains(info, "Paused") {
 		t.Fatalf("tooltip = %q", info)
 	}
 	page := httptest.NewRecorder()
 	srv.renderAdmin(page, httptest.NewRequest(http.MethodGet, "/admin", nil), adminSession{}, "", "", http.StatusOK)
-	if !strings.Contains(page.Body.String(), `name="credit" value="weekly_b"`) {
-		t.Fatalf("admin page offers no reset button: %s", page.Body.String())
+	body := page.Body.String()
+	weekly, session := strings.Index(body, `name="credit" value="weekly_b"`), strings.Index(body, `name="credit" value="session_a"`)
+	if weekly < 0 || session < weekly || strings.Contains(body, `value="paused_c"`) || !strings.Contains(body, `title="Weekly reset"`) {
+		t.Fatalf("admin page reset buttons are wrong: %s", body)
 	}
 }
 

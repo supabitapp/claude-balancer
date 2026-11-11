@@ -50,7 +50,7 @@
 </select><noscript><button class="action" type="submit">save</button></noscript>
 </form>{{end}}
 
-{{define "banked-reset-control"}}<form class="inline" action="/admin/accounts/reset" method="post" hx-post="/admin/accounts/reset" hx-confirm="Use one banked reset for {{.Row.Name}} now?">{{template "csrf" .CSRF}}<input type="hidden" name="account" value="{{.Row.ID}}"><input type="hidden" name="credit" value="{{.Row.ResetCreditID}}"><button class="action" type="submit" aria-label="Use banked reset for {{.Row.Name}}">use</button></form>{{end}}
+{{define "banked-reset-control"}}<form class="inline" action="/admin/accounts/reset" method="post" hx-post="/admin/accounts/reset" hx-confirm="Use “{{.Row.Label}}” for {{.Row.Account}} now?">{{template "csrf" .CSRF}}<input type="hidden" name="account" value="{{.Row.AccountID}}"><input type="hidden" name="credit" value="{{.Row.ID}}"><button class="action" type="submit" title="{{.Row.Label}}" aria-label="Use {{.Row.Label}} for {{.Row.Account}}">use</button></form>{{end}}
 
 {{define "account-actions"}}<button class="menu-trigger" type="button" popovertarget="{{.Row.DOMID}}-menu" aria-label="Actions for {{.Row.Name}}">⋯</button>
 <div id="{{.Row.DOMID}}-menu" class="menu" popover>
