@@ -15,7 +15,7 @@ type resetCreditUpstream struct {
 	t       *testing.T
 	grants  string
 	result  string
-	claims  []consumeResetCreditRequest
+	claims  []map[string]string
 	polling []string
 }
 
@@ -30,7 +30,7 @@ func (u *resetCreditUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	case r.Method == http.MethodGet:
 		io.WriteString(w, `{}`)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/organizations/org-1/reset_rate_limits":
-		var claim consumeResetCreditRequest
+		var claim map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&claim); err != nil {
 			u.t.Error(err)
 		}
@@ -131,8 +131,8 @@ func TestAdminBankedResetRedeemsTheChosenGrant(t *testing.T) {
 		t.Fatalf("claims = %d, want 1", len(upstream.claims))
 	}
 	claim := upstream.claims[0]
-	if claim.Program != "cedar_ember" || claim.GrantID != "weekly_b" || claim.RequestID == "" {
-		t.Fatalf("claim = %+v", claim)
+	if len(claim) != 3 || claim["program"] != "cedar_ember" || claim["grant_id"] != "weekly_b" || claim["request_id"] == "" {
+		t.Fatalf("claim = %v", claim)
 	}
 	if stats := srv.currentStats(time.Now()).Accounts[0]; stats.BankedResets == nil || *stats.BankedResets != 2 {
 		t.Fatalf("banked resets after use = %v, want 2", stats.BankedResets)
@@ -154,10 +154,10 @@ func TestAdminBankedResetRetriesAnUnconfirmedClaimWithTheSameRequest(t *testing.
 	if len(upstream.claims) != 3 {
 		t.Fatalf("claims = %d, want 3", len(upstream.claims))
 	}
-	if upstream.claims[0].RequestID != upstream.claims[1].RequestID {
+	if upstream.claims[0]["request_id"] != upstream.claims[1]["request_id"] {
 		t.Fatal("retry of an unconfirmed claim used a new request id")
 	}
-	if upstream.claims[1].RequestID == upstream.claims[2].RequestID {
+	if upstream.claims[1]["request_id"] == upstream.claims[2]["request_id"] {
 		t.Fatal("a new claim reused a settled request id")
 	}
 }

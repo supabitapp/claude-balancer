@@ -377,7 +377,7 @@ func (s *server) pollResetCredits(ctx context.Context, account *Account) error {
 	}
 	var count int64
 	for _, grant := range program.Grants {
-		if !grant.Paused {
+		if grant.usable(fetchedAt) {
 			count += grant.ResetsLeft
 		}
 	}
