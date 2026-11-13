@@ -88,7 +88,11 @@ func (a *Account) refreshOwned(wait context.Context, owner refreshOwner) error {
 				defer observed.span.End() // before registration is released/exporter shutdown
 				observed.outcome(ctx, "exchange_started", nil)
 				tokens, permanent, err := exchangeAccountRefreshToken(ctx, owner.client, state)
-				observed.outcome(ctx, "exchange_finished", err)
+				var reported []slog.Attr
+				if !tokens.reportedLoginExpiry.IsZero() {
+					reported = append(reported, slog.Time("reported_login_expires_at", tokens.reportedLoginExpiry))
+				}
+				observed.outcome(ctx, "exchange_finished", err, reported...)
 				cancel()
 				// Decoded results must survive waiter/runtime cancellation. Only
 				// the completion budget (or its shutdown grace) can interrupt this

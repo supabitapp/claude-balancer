@@ -29,6 +29,9 @@ const (
 	claudeOAuthScope    = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 	claudeOAuthPort     = 54545
 	claudeOAuthPath     = "/callback"
+
+	defaultLoginLifetime     = 30 * 24 * time.Hour
+	maxReportedLoginLifetime = 10 * 365 * 24 * time.Hour
 )
 
 var (
@@ -57,24 +60,26 @@ type claudePKCE struct {
 }
 
 type claudeCredentials struct {
-	AccessToken      string
-	RefreshToken     string
-	AccountID        string
-	Email            string
-	PlanType         string
-	OrganizationID   string
-	OrganizationName string
-	DeviceID         string
-	ExpiresAt        time.Time
-	LastRefresh      time.Time
+	AccessToken      string    `json:"-"`
+	RefreshToken     string    `json:"-"`
+	AccountID        string    `json:"account_id"`
+	Email            string    `json:"email"`
+	PlanType         string    `json:"plan_type,omitempty"`
+	OrganizationID   string    `json:"organization_id"`
+	OrganizationName string    `json:"organization_name"`
+	DeviceID         string    `json:"device_id"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	LoginExpiresAt   time.Time `json:"login_expires_at,omitzero"`
+	LastRefresh      time.Time `json:"-"`
 }
 
 type claudeOAuthTokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int    `json:"expires_in"`
-	Organization struct {
+	AccessToken           string          `json:"access_token"`
+	RefreshToken          string          `json:"refresh_token"`
+	TokenType             string          `json:"token_type"`
+	ExpiresIn             int             `json:"expires_in"`
+	RefreshTokenExpiresIn json.RawMessage `json:"refresh_token_expires_in"`
+	Organization          struct {
 		ID   string `json:"uuid"`
 		Name string `json:"name"`
 	} `json:"organization"`
@@ -373,6 +378,9 @@ func exchangeClaudeCode(ctx context.Context, hc *http.Client, code, state string
 	if credentials.AccessToken == "" {
 		return nil, errors.New("Claude token exchange returned no access token")
 	}
+	if credentials.LoginExpiresAt.IsZero() {
+		credentials.LoginExpiresAt = credentials.LastRefresh.Add(defaultLoginLifetime)
+	}
 	if profile, err := fetchClaudeOAuthProfile(ctx, hc, credentials.AccessToken); err == nil {
 		mergeClaudeProfile(&credentials, profile)
 	}
@@ -562,6 +570,10 @@ func claudeCredentialsFromToken(token claudeOAuthTokenResponse, now time.Time) c
 	if token.ExpiresIn > 0 {
 		credentials.ExpiresAt = now.Add(time.Duration(token.ExpiresIn) * time.Second)
 	}
+	seconds, err := strconv.ParseFloat(string(token.RefreshTokenExpiresIn), 64)
+	if err == nil && seconds > 0 && seconds <= maxReportedLoginLifetime.Seconds() {
+		credentials.LoginExpiresAt = now.Add(time.Duration(seconds * float64(time.Second)))
+	}
 	return credentials
 }
 
@@ -607,11 +619,21 @@ func exchangeAccountRefreshToken(ctx context.Context, hc *http.Client, state acc
 	if credentials.DeviceID == "" {
 		credentials.DeviceID = previous.DeviceID
 	}
+	reported := credentials.LoginExpiresAt
+	credentials.LoginExpiresAt = loginExpiryAfterRefresh(previous.LoginExpiresAt, reported)
 	return tokenResponse{
-		IDToken:      claudeIdentityToken(credentials),
-		AccessToken:  credentials.AccessToken,
-		RefreshToken: credentials.RefreshToken,
+		IDToken:             claudeIdentityToken(credentials),
+		AccessToken:         credentials.AccessToken,
+		RefreshToken:        credentials.RefreshToken,
+		reportedLoginExpiry: reported,
 	}, false, nil
+}
+
+func loginExpiryAfterRefresh(signedIn, reported time.Time) time.Time {
+	if signedIn.IsZero() || reported.IsZero() || signedIn.Before(reported) {
+		return signedIn
+	}
+	return reported
 }
 
 func isClaudeIdentityToken(token string) bool {
@@ -625,25 +647,9 @@ func isClaudeIdentityToken(token string) bool {
 }
 
 func claudeCredentialsFromIdentityToken(token string) claudeCredentials {
-	var identity struct {
-		AccountID        string    `json:"account_id"`
-		Email            string    `json:"email"`
-		PlanType         string    `json:"plan_type"`
-		OrganizationID   string    `json:"organization_id"`
-		OrganizationName string    `json:"organization_name"`
-		DeviceID         string    `json:"device_id"`
-		ExpiresAt        time.Time `json:"expires_at"`
-	}
-	_ = json.Unmarshal([]byte(token), &identity)
-	return claudeCredentials{
-		AccountID:        identity.AccountID,
-		Email:            identity.Email,
-		PlanType:         identity.PlanType,
-		OrganizationID:   identity.OrganizationID,
-		OrganizationName: identity.OrganizationName,
-		DeviceID:         identity.DeviceID,
-		ExpiresAt:        identity.ExpiresAt,
-	}
+	var credentials claudeCredentials
+	_ = json.Unmarshal([]byte(token), &credentials)
+	return credentials
 }
 
 func claudeRefreshPermanent(err error) bool {
@@ -672,18 +678,11 @@ func randomClaudeDeviceID() (string, error) {
 }
 
 func claudeIdentityToken(credentials claudeCredentials) string {
+	credentials.PlanType = strings.TrimSpace(credentials.PlanType)
 	payload, _ := json.Marshal(struct {
-		Provider         string    `json:"provider"`
-		AccountID        string    `json:"account_id"`
-		Email            string    `json:"email"`
-		PlanType         string    `json:"plan_type,omitempty"`
-		OrganizationID   string    `json:"organization_id"`
-		OrganizationName string    `json:"organization_name"`
-		DeviceID         string    `json:"device_id"`
-		ExpiresAt        time.Time `json:"expires_at,omitempty"`
-	}{Provider: "claude", AccountID: credentials.AccountID, Email: credentials.Email, PlanType: strings.TrimSpace(credentials.PlanType),
-		OrganizationID: credentials.OrganizationID, OrganizationName: credentials.OrganizationName,
-		DeviceID: credentials.DeviceID, ExpiresAt: credentials.ExpiresAt})
+		Provider string `json:"provider"`
+		claudeCredentials
+	}{"claude", credentials})
 	return string(payload)
 }
 
