@@ -39,6 +39,7 @@ td { font-weight: 400 }
 .status-mark.status-priority { color: var(--amber-11) }
 .status-mark.status-cooling { color: var(--amber-11) }
 .status-mark.status-needs_reauth { color: var(--red-11) }
+.login-note { color: var(--amber-11) }
 .spark { letter-spacing: .08em }
 .empty { padding: .5rem 0 }
 .overview { display: flex; gap: 1rem; margin: 0; overflow-x: auto }

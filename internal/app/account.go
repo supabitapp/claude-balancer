@@ -356,6 +356,12 @@ func (a *Account) expires() time.Time {
 	return identity.ExpiresAt
 }
 
+func (a *Account) loginExpires() time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return claudeCredentialsFromIdentityToken(a.IDToken).LoginExpiresAt
+}
+
 func (a *Account) markRejectedAccessToken(token authorizationRevision) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -472,6 +478,8 @@ type tokenResponse struct {
 	IDToken      string `json:"id_token"`
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+
+	reportedLoginExpiry time.Time
 }
 
 var permanentRefreshFailures = []string{

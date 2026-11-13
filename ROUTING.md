@@ -77,6 +77,16 @@ An `invalid_grant` or otherwise terminal refresh result marks the account for
 reauthentication and removes it from selection until the `/accounts` flow
 completes.
 
+Claude ends every sign-in at a time fixed when the sign-in is granted. A
+refresh does not move that time. Once it passes, the next refresh fails with
+`invalid_grant` and the description `Refresh token expired`. The balancer
+records the time Claude reports at sign-in, or 30 days when Claude reports
+none. That time is the latest possible end, and Claude can end the sign-in up
+to three days earlier. The dashboard shows the resulting range in the status
+tooltip and warns in the account row from seven days before the earliest end.
+`/stats` reports the latest end as `login_expires_at`. An account that signed
+in before the balancer recorded this shows no time until it signs in again.
+
 `Retry-After` is treated as a local hint and is clamped to a safe minimum before
 it is exposed to clients. The router never sleeps a request for an unbounded
 period and never turns a client cancellation into an account penalty.

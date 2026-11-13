@@ -137,6 +137,9 @@ func (s *server) completeClaudeAccountLogin(ctx context.Context, flow *claudeOAu
 	if s.stats != nil {
 		s.stats.note("account added", account.id(), "")
 	}
+	if s.log != nil {
+		s.log.Info("account signed in", "account", account.id(), "login_expires_at", account.loginExpires())
+	}
 }
 
 func (s *server) accountLoginStatus(w http.ResponseWriter, _ *http.Request) {

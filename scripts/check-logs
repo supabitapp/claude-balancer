@@ -21,7 +21,7 @@ FIELDS = (
     "last_event_type", "pending_turns", "accepted_pending_turns", "active_turns",
     "status", "write_attempted", "write_succeeded", "accepted",
     "sse_committed", "relay_cleaned", "admission_released", "inference_replayed",
-    "retry_owner", "otel_enabled",
+    "retry_owner", "otel_enabled", "login_expires_at", "reported_login_expires_at",
 )
 NOISY_MESSAGES = ("routing candidate", "usage polled")
 NOISY_STAGES = ("routing_candidate", "upstream_event", "downstream_event")

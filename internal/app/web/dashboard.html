@@ -102,7 +102,7 @@
 <tbody>{{range .Accounts}}<tr id="{{.DOMID}}">
 <td>{{if $.Admin}}<span id="{{.DOMID}}-name" class="has-tooltip quiet" data-tooltip="Account ID: {{.ID}}" aria-describedby="dashboard-tooltip" tabindex="0">{{.Name}}</span>{{else}}{{.Name}}{{end}}</td>
 <td class="dim">{{if .PlanInfo}}<span id="{{.DOMID}}-plan" class="has-tooltip" data-tooltip="{{.PlanInfo}}" aria-describedby="dashboard-tooltip" tabindex="0">{{dashboardPlan .Plan}}</span>{{else}}{{dashboardPlan .Plan}}{{end}}</td>
-{{$status := dashboardStatus .Status}}<td class="status">{{if .StatusInfo}}<span id="{{.DOMID}}-status" class="has-tooltip" data-tooltip="{{.StatusInfo}}" aria-describedby="dashboard-tooltip" tabindex="0"><span class="status-mark status-{{.Status}}">{{$status.Mark}}</span> {{$status.Label}}</span>{{else}}<span class="status-mark status-{{.Status}}">{{$status.Mark}}</span> {{$status.Label}}{{end}}</td>
+{{$status := dashboardStatus .Status}}<td class="status">{{if .StatusInfo}}<span id="{{.DOMID}}-status" class="has-tooltip" data-tooltip="{{.StatusInfo}}" aria-describedby="dashboard-tooltip" tabindex="0"><span class="status-mark status-{{.Status}}">{{$status.Mark}}</span> {{$status.Label}}</span>{{else}}<span class="status-mark status-{{.Status}}">{{$status.Mark}}</span> {{$status.Label}}{{end}}{{if .LoginNote}} <span class="login-note">{{.LoginNote}}</span>{{end}}</td>
 {{if $.Admin}}<td>{{template "routing-control" ($.Admin.With .)}}</td>
 {{end}}<td>{{.FiveHour}}</td>
 <td>{{.Fable}}</td>
@@ -136,7 +136,7 @@
 <tbody>{{range .Workspaces}}<tr id="{{.DOMID}}">
 <td>{{if $.Admin}}<span id="{{.DOMID}}-name" class="has-tooltip quiet" data-tooltip="Account ID: {{.ID}}" aria-describedby="dashboard-tooltip" tabindex="0">{{.Name}}</span>{{else}}{{.Name}}{{end}}</td>
 <td class="dim">{{if .PlanInfo}}<span id="{{.DOMID}}-plan" class="has-tooltip" data-tooltip="{{.PlanInfo}}" aria-describedby="dashboard-tooltip" tabindex="0">{{dashboardPlan .Plan}}</span>{{else}}{{dashboardPlan .Plan}}{{end}}</td>
-{{$status := dashboardStatus .Status}}<td class="status">{{if .StatusInfo}}<span id="{{.DOMID}}-status" class="has-tooltip" data-tooltip="{{.StatusInfo}}" aria-describedby="dashboard-tooltip" tabindex="0"><span class="status-mark status-{{.Status}}">{{$status.Mark}}</span> {{$status.Label}}</span>{{else}}<span class="status-mark status-{{.Status}}">{{$status.Mark}}</span> {{$status.Label}}{{end}}</td>
+{{$status := dashboardStatus .Status}}<td class="status">{{if .StatusInfo}}<span id="{{.DOMID}}-status" class="has-tooltip" data-tooltip="{{.StatusInfo}}" aria-describedby="dashboard-tooltip" tabindex="0"><span class="status-mark status-{{.Status}}">{{$status.Mark}}</span> {{$status.Label}}</span>{{else}}<span class="status-mark status-{{.Status}}">{{$status.Mark}}</span> {{$status.Label}}{{end}}{{if .LoginNote}} <span class="login-note">{{.LoginNote}}</span>{{end}}</td>
 <td>{{.Limit}}</td>
 <td>{{if .CreditsInfo}}<span id="{{.DOMID}}-credits" class="has-tooltip" data-tooltip="{{.CreditsInfo}}" aria-describedby="dashboard-tooltip" tabindex="0">{{.Credits}}</span>{{else}}{{.Credits}}{{end}}</td>
 <td>{{.Used}}</td>

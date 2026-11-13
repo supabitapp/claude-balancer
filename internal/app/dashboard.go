@@ -24,6 +24,9 @@ const (
 	dashboardEventName       = "dashboard"
 	dashboardSubscriberQueue = 2
 	waterCSSURL              = "https://cdn.jsdelivr.net/npm/water.css@2/out/water.css"
+
+	dashboardLoginEarlyEnd      = 3 * 24 * time.Hour
+	dashboardLoginExpiryWarning = 7 * 24 * time.Hour
 )
 
 //go:embed web/admin.html web/admin.css web/admin.js web/accounts.css web/accounts.html web/accounts.js web/dashboard.html web/dashboard.css web/dashboard.js web/favicon.svg web/htmx-2.0.10.min.js web/idiomorph-0.7.4.min.js web/sse-2.2.4.min.js
@@ -77,6 +80,7 @@ type dashboardAccountView struct {
 	PlanInfo        string
 	Status          accountStatus
 	StatusInfo      string
+	LoginNote       string
 	FiveHour        string
 	Fable           string
 	Weekly          string
@@ -100,6 +104,7 @@ type dashboardWorkspaceView struct {
 	PlanInfo    string
 	Status      accountStatus
 	StatusInfo  string
+	LoginNote   string
 	Credits     string
 	CreditsInfo string
 	Limit       string
@@ -463,13 +468,15 @@ func (s *server) dashboardAt(now time.Time, private bool) dashboardView {
 		if usage.UnpricedResponses > 0 {
 			monthlyBurnInfo = "Some responses have no available price. " + monthlyBurnInfo
 		}
+		loginNote, loginInfo := dashboardLoginExpiry(now, account.LoginExpiresAt)
 		view := dashboardAccountView{
 			DOMID:           dashboardDOMID("account", account.ID),
 			Name:            name,
 			Plan:            account.Plan,
 			PlanInfo:        dashboardPlanInfo(now, account.Subscription),
 			Status:          account.Status,
-			StatusInfo:      dashboardAccountStatusInfo(now, account),
+			StatusInfo:      strings.TrimSpace(dashboardAccountStatusInfo(now, account) + " " + loginInfo),
+			LoginNote:       loginNote,
 			FiveHour:        fiveHour,
 			Fable:           fable,
 			Weekly:          weekly,
@@ -571,13 +578,15 @@ func (s *server) dashboardAt(now time.Time, private bool) dashboardView {
 }
 
 func newDashboardWorkspaceView(now time.Time, name string, account accountStatsResponse) dashboardWorkspaceView {
+	loginNote, loginInfo := dashboardLoginExpiry(now, account.LoginExpiresAt)
 	view := dashboardWorkspaceView{
 		DOMID:       dashboardDOMID("workspace", account.ID),
 		Name:        name,
 		Plan:        account.Plan,
 		PlanInfo:    dashboardPlanInfo(now, account.Subscription),
 		Status:      account.Status,
-		StatusInfo:  dashboardAccountStatusInfo(now, account),
+		StatusInfo:  strings.TrimSpace(dashboardAccountStatusInfo(now, account) + " " + loginInfo),
+		LoginNote:   loginNote,
 		Credits:     dashboardCreditBalance(account.Credits),
 		CreditsInfo: dashboardCreditInfo(account.Credits),
 		Limit:       "--",
@@ -953,6 +962,25 @@ func dashboardStatus(status accountStatus) dashboardStatusView {
 		return dashboardStatusView{Mark: "$", Label: "credits"}
 	default:
 		return dashboardStatusView{Label: string(status)}
+	}
+}
+
+func dashboardLoginExpiry(now, latest time.Time) (note, info string) {
+	if latest.IsZero() {
+		return "", ""
+	}
+	earliest := latest.Add(-dashboardLoginEarlyEnd)
+	between := "between " + earliest.UTC().Format(time.DateOnly) + " and " + latest.UTC().Format(time.DateOnly) + " UTC."
+	const renew = " Sign in again at /accounts to keep this account available."
+	switch {
+	case now.Before(earliest.Add(-dashboardLoginExpiryWarning)):
+		return "", "Sign-in ends " + between
+	case now.Before(earliest):
+		return "sign-in may end in " + short(earliest.Sub(now)), "Sign-in ends " + between + renew
+	case now.Before(latest):
+		return "sign-in can end any time", "Sign-in can end at any time until " + latest.UTC().Format("2006-01-02 15:04 UTC") + "." + renew
+	default:
+		return "sign-in may have ended", "Sign-in may have ended " + between + " Sign in again at /accounts."
 	}
 }
 

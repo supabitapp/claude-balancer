@@ -748,6 +748,7 @@ type accountStatsResponse struct {
 	Plan                     string                        `json:"plan"`
 	Subscription             *subscriptionStatsResponse    `json:"subscription,omitempty"`
 	Status                   accountStatus                 `json:"status"`
+	LoginExpiresAt           time.Time                     `json:"login_expires_at,omitzero"`
 	RoutingMode              routingMode                   `json:"routing_mode"`
 	RoutingPriority          *routingPriorityStatsResponse `json:"routing_priority,omitempty"`
 	WeeklyRemainingPercent   *float64                      `json:"weekly_remaining_percent"`
@@ -903,6 +904,7 @@ func (s *server) statsResponseAt(now time.Time, snapshot Snapshot) statsResponse
 			Plan:                     plan,
 			Subscription:             subscriptionStats(claims, plan),
 			Status:                   status,
+			LoginExpiresAt:           account.loginExpires(),
 			RoutingMode:              candidate.mode,
 			RoutingPriority:          routingPriority,
 			WeeklyRemainingPercent:   weeklyRemaining,

@@ -48,7 +48,7 @@ func (o *refreshObservation) waiter(ctx context.Context, first bool, count int) 
 	observation(ctx).event(ctx, "refresh_joined", attrs...)
 }
 
-func (o *refreshObservation) outcome(ctx context.Context, stage string, err error) {
+func (o *refreshObservation) outcome(ctx context.Context, stage string, err error, extra ...slog.Attr) {
 	kind := telemetryErrorClass(err)
 	trace.SpanFromContext(ctx).AddEvent(stage, trace.WithAttributes(attribute.String("error.type", kind)))
 	if o.log != nil {
@@ -56,6 +56,6 @@ func (o *refreshObservation) outcome(ctx context.Context, stage string, err erro
 		if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
 			attrs = append(attrs, slog.String("trace_id", sc.TraceID().String()), slog.String("span_id", sc.SpanID().String()))
 		}
-		o.log.LogAttrs(ctx, slog.LevelDebug, "credential refresh operation", attrs...)
+		o.log.LogAttrs(ctx, slog.LevelDebug, "credential refresh operation", append(attrs, extra...)...)
 	}
 }
