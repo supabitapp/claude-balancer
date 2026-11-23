@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -193,5 +194,47 @@ func TestAdminBankedResetReportsRefusals(t *testing.T) {
 				t.Fatalf("claims = %d, want %d", len(upstream.claims), test.claims)
 			}
 		})
+	}
+}
+
+func TestFailedAccountPollsBackOffUntilRetryAfter(t *testing.T) {
+	var requests int
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Retry-After", "240")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(api.Close)
+	previous := accountAPIBaseURL
+	accountAPIBaseURL = api.URL + "/api/oauth"
+	t.Cleanup(func() { accountAPIBaseURL = previous })
+	account := accountFromState(accountState{
+		IDToken:     claudeIdentityToken(claudeCredentials{AccountID: "account", OrganizationID: "org-1", Email: "a@example.com"}),
+		AccessToken: "access-token",
+		LastRefresh: time.Now(),
+	})
+	srv := newTestServer(t, []*Account{account})
+
+	start := time.Now()
+	srv.pollDueUsage(t.Context(), time.Hour)
+	srv.pollDueUsage(t.Context(), time.Hour)
+	if requests != 1 {
+		t.Fatalf("upstream requests = %d, want 1 while backing off", requests)
+	}
+	if usage, credits := account.pollsDue(start.Add(3*time.Minute), time.Hour); usage || credits {
+		t.Fatal("polls are due before Retry-After elapsed")
+	}
+	if usage, credits := account.pollsDue(start.Add(5*time.Minute), time.Hour); !usage || !credits {
+		t.Fatal("polls are not due after Retry-After elapsed")
+	}
+
+	account.notePollResult(start, errors.New("still failing"))
+	account.notePollResult(start, errors.New("still failing"))
+	if usage, _ := account.pollsDue(start.Add(7*time.Minute), time.Hour); usage {
+		t.Fatal("repeated failures did not back off exponentially")
+	}
+	account.notePollResult(start, nil)
+	if usage, _ := account.pollsDue(start, time.Hour); !usage {
+		t.Fatal("a successful poll did not clear the backoff")
 	}
 }

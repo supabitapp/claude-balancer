@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -277,7 +278,7 @@ func (s *server) pollUsage(ctx context.Context, account *Account) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("usage returned %s", resp.Status)
+		return accountResponseError("usage", resp)
 	}
 
 	var payload usagePayload
@@ -373,7 +374,7 @@ func (s *server) pollResetCredits(ctx context.Context, account *Account) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("reset credits returned %s", resp.Status)
+		return accountResponseError("reset credits", resp)
 	}
 	var payload resetCreditsPayload
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -444,6 +445,20 @@ func (s *server) doAccountRequest(ctx context.Context, account *Account, method,
 			return nil, err
 		}
 	}
+}
+
+type accountHTTPError struct {
+	endpoint   string
+	status     string
+	retryAfter time.Duration
+}
+
+func (e *accountHTTPError) Error() string {
+	return e.endpoint + " returned " + e.status
+}
+
+func accountResponseError(endpoint string, resp *http.Response) error {
+	return &accountHTTPError{endpoint: endpoint, status: resp.Status, retryAfter: parseClaudeRetryAfter(resp)}
 }
 
 func expiringResetCredit(credits []resetCredit, now time.Time) (resetCredit, bool) {
@@ -560,6 +575,9 @@ func (a *Account) markResetCreditsUnavailable(fetchedAt time.Time) {
 func (a *Account) pollsDue(now time.Time, every time.Duration) (usage, resetCredits bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if now.Before(a.pollRetryAt) {
+		return false, false
+	}
 	usageEvery := every
 	if a.spent || spendLimitReached(a.spendControl) || now.Before(a.cooldown) || a.pressure() >= 95 {
 		usageEvery = min(usageEvery, urgentUsageRefreshInterval)
@@ -567,6 +585,21 @@ func (a *Account) pollsDue(now time.Time, every time.Duration) (usage, resetCred
 	usage = a.usageFetchedAt.IsZero() || now.Sub(a.usageFetchedAt) >= usageEvery
 	resetCredits = a.resetCredits.fetchedAt.IsZero() || now.Sub(a.resetCredits.fetchedAt) >= accountDetailRefreshInterval
 	return usage, resetCredits
+}
+
+func (a *Account) notePollResult(now time.Time, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err == nil {
+		a.pollRetryAt, a.pollFailures = time.Time{}, 0
+		return
+	}
+	delay := min(urgentUsageRefreshInterval<<min(a.pollFailures, 5), accountDetailRefreshInterval)
+	if httpErr, ok := errors.AsType[*accountHTTPError](err); ok {
+		delay = max(delay, httpErr.retryAfter)
+	}
+	a.pollRetryAt = now.Add(delay)
+	a.pollFailures++
 }
 
 func (s *server) pollAllUsage(ctx context.Context) {
@@ -587,7 +620,12 @@ func (s *server) pollAccountData(ctx context.Context, every time.Duration, force
 		}
 		poll := func(due bool, kind string, run func() error) bool {
 			if due {
-				if err := run(); err != nil && ctx.Err() == nil {
+				err := run()
+				if ctx.Err() != nil {
+					return false
+				}
+				account.notePollResult(time.Now(), err)
+				if err != nil {
 					message := kind + " poll failed"
 					s.log.Warn(message, "account", account.id(), "error", err)
 					s.stats.note(message, account.id(), err.Error())

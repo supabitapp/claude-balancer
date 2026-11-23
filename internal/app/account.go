@@ -56,6 +56,8 @@ type Account struct {
 	credits               *creditsPayload
 	creditsRejected       bool
 	usageFetchedAt        time.Time
+	pollRetryAt           time.Time
+	pollFailures          int
 	planFetchedAt         time.Time
 	lastUsed              time.Time
 }
