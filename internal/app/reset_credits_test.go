@@ -197,17 +197,22 @@ func TestAdminBankedResetReportsRefusals(t *testing.T) {
 	}
 }
 
-func TestFailedAccountPollsBackOffUntilRetryAfter(t *testing.T) {
+func TestRateLimitedUsageBacksOffAndStillLearnsPlan(t *testing.T) {
 	var requests int
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/oauth/profile" {
+			io.WriteString(w, `{"organization":{"organization_type":"claude_free","rate_limit_tier":"default_claude_ai"}}`)
+			return
+		}
 		requests++
 		w.Header().Set("Retry-After", "240")
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	t.Cleanup(api.Close)
-	previous := accountAPIBaseURL
+	previousAccount, previousProfile := accountAPIBaseURL, claudeOAuthProfileURL
 	accountAPIBaseURL = api.URL + "/api/oauth"
-	t.Cleanup(func() { accountAPIBaseURL = previous })
+	claudeOAuthProfileURL = api.URL + "/api/oauth/profile"
+	t.Cleanup(func() { accountAPIBaseURL, claudeOAuthProfileURL = previousAccount, previousProfile })
 	account := accountFromState(accountState{
 		IDToken:     claudeIdentityToken(claudeCredentials{AccountID: "account", OrganizationID: "org-1", Email: "a@example.com"}),
 		AccessToken: "access-token",
@@ -220,6 +225,9 @@ func TestFailedAccountPollsBackOffUntilRetryAfter(t *testing.T) {
 	srv.pollDueUsage(t.Context(), time.Hour)
 	if requests != 1 {
 		t.Fatalf("upstream requests = %d, want 1 while backing off", requests)
+	}
+	if got := account.plan(); got != "free" {
+		t.Fatalf("plan = %q, want free from the profile while usage is rate limited", got)
 	}
 	if usage, credits := account.pollsDue(start.Add(3*time.Minute), time.Hour); usage || credits {
 		t.Fatal("polls are due before Retry-After elapsed")

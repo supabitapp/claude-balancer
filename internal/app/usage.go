@@ -300,9 +300,6 @@ func (s *server) pollUsage(ctx context.Context, account *Account) error {
 	if err := s.persistClaudePlan(ctx, account, payload.PlanType); err != nil && ctx.Err() == nil {
 		s.log.Debug("plan metadata persistence failed", "account", account.id(), "error", err)
 	}
-	if err := s.pollClaudePlan(ctx, account); err != nil && ctx.Err() == nil {
-		s.log.Debug("plan metadata poll failed", "account", account.id(), "error", err)
-	}
 	var limitReached any
 	if payload.RateLimit.LimitReached != nil {
 		limitReached = *payload.RateLimit.LimitReached
@@ -323,6 +320,7 @@ func (s *server) pollClaudePlan(ctx context.Context, account *Account) error {
 	if !strings.EqualFold(account.claims().Provider, "claude") || !account.planMetadataDue(time.Now()) {
 		return nil
 	}
+	account.markPlanMetadataFetched(time.Now())
 	resp, err := s.doAccountRequest(ctx, account, http.MethodGet, claudeOAuthProfileURL, nil)
 	if err != nil {
 		return err
@@ -335,7 +333,6 @@ func (s *server) pollClaudePlan(ctx context.Context, account *Account) error {
 	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
 		return err
 	}
-	account.markPlanMetadataFetched(time.Now())
 	plan := claudeProfilePlan(&profile)
 	if plan == "" {
 		return nil
@@ -642,6 +639,10 @@ func (s *server) pollAccountData(ctx context.Context, every time.Duration, force
 		}
 		if account.needsReauth() {
 			continue
+		}
+		if err := s.pollClaudePlan(ctx, account); err != nil && ctx.Err() == nil {
+			s.log.Warn("plan poll failed", "account", account.id(), "error", err)
+			s.stats.note("plan poll failed", account.id(), err.Error())
 		}
 		if !force {
 			_, resetCreditsDue = account.pollsDue(time.Now(), every)
