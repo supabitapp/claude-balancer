@@ -81,7 +81,6 @@ type routingDecision struct {
 	account        *Account
 	blocked        string
 	priorOwner     string
-	reason         routingReason
 	candidates     []routingCandidate
 	now            time.Time
 	creditFallback bool
@@ -259,7 +258,7 @@ func (p *Pool) route(owners []string, skip map[string]bool) routingDecision {
 			}
 			if !candidate.quotaKnown() || !now.After(candidate.cooldown) {
 				decision.blocked = owner
-				decision.retryAt = decision.cooldownRecovery(nil)
+				decision.retryAt = decision.cooldownRecovery()
 				return decision
 			}
 			if !skip[candidate.id] {
@@ -289,7 +288,7 @@ func (p *Pool) route(owners []string, skip map[string]bool) routingDecision {
 		return !skip[candidate.id] && candidate.creditAvailable(now)
 	})
 	decision.creditFallback = decision.account != nil
-	decision.retryAt = decision.cooldownRecovery(nil)
+	decision.retryAt = decision.cooldownRecovery()
 	return decision
 }
 

@@ -36,9 +36,8 @@
 {{template "keys-update" .}}
 {{template "events-update" .}}{{end}}
 
-{{define "fast-mode-control"}}<form class="segmented" action="/admin/settings" method="post" hx-post="/admin/settings" hx-confirm="Change fast mode? Existing connections restart, which can interrupt active turns.">{{template "csrf" .Admin.CSRF}}
+{{define "fast-mode-control"}}<form class="segmented" action="/admin/settings" method="post" hx-post="/admin/settings">{{template "csrf" .Admin.CSRF}}
 <button type="submit" name="fast-mode" value="default" aria-pressed="{{eq .Admin.FastMode "default"}}">default</button>
-<button type="submit" name="fast-mode" value="on" aria-pressed="{{eq .Admin.FastMode "on"}}">fast</button>
 <button type="submit" name="fast-mode" value="off" aria-pressed="{{eq .Admin.FastMode "off"}}">standard</button>
 </form>{{end}}
 

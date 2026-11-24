@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -11,87 +10,54 @@ import (
 type fastMode string
 
 const (
-	fastModeDefault fastMode = "default"
-	fastModeOn      fastMode = "on"
-	fastModeOff     fastMode = "off"
+	fastModeDefault  fastMode = "default"
+	fastModeOff      fastMode = "off"
+	fastModeLegacyOn fastMode = "on"
 )
 
 func (m fastMode) valid() bool {
-	return m == fastModeDefault || m == fastModeOn || m == fastModeOff
+	return m == fastModeDefault || m == fastModeOff
+}
+
+func storedFastMode(value string) (fastMode, error) {
+	mode := fastMode(value)
+	if mode == fastModeLegacyOn {
+		return fastModeDefault, nil
+	}
+	if !mode.valid() {
+		return "", fmt.Errorf("invalid stored fast mode %q", value)
+	}
+	return mode, nil
 }
 
 func (m fastMode) label() string {
-	switch m {
-	case fastModeOn:
-		return "force fast"
-	case fastModeOff:
+	if m == fastModeOff {
 		return "force standard"
-	default:
-		return "default"
 	}
+	return "default"
 }
 
-func (m fastMode) description() string {
-	switch m {
-	case fastModeOn:
-		return "Forces fast mode for all requests, overriding the client's preference."
-	case fastModeOff:
-		return "Forces standard mode for all requests, overriding the client's preference."
-	default:
-		return "Uses the client's fast mode preference for each request."
-	}
-}
-
-// Preserve all request fields, including fields unknown to websocketEnvelope.
-func (m fastMode) override(data []byte, tier string) ([]byte, string, error) {
-	if m != fastModeOn && m != fastModeOff {
-		return data, tier, nil
-	}
-	tier = "default"
-	if m == fastModeOn {
-		tier = serviceTierPriority
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return nil, "", err
-	}
-	fields["service_tier"], _ = json.Marshal(tier)
-	data, err := json.Marshal(fields)
-	return data, tier, err
-}
-
-// Closing a policy's notification channel reaches every relay that captured it,
-// even a relay that has not yet entered its event loop.
 type fastModePolicy struct {
-	mu      sync.Mutex
-	mode    fastMode
-	changed chan struct{}
+	mu   sync.Mutex
+	mode fastMode
 }
 
-func (p *fastModePolicy) snapshot() (fastMode, <-chan struct{}) {
+func (p *fastModePolicy) snapshot() fastMode {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.init()
-	return p.mode, p.changed
-}
-
-func (p *fastModePolicy) init() {
-	if p.changed == nil {
-		p.mode = fastModeDefault
-		p.changed = make(chan struct{})
+	if p.mode == "" {
+		return fastModeDefault
 	}
+	return p.mode
 }
 
 func (p *fastModePolicy) set(mode fastMode) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.init()
 	if p.mode == mode {
 		return false
 	}
 	p.mode = mode
-	close(p.changed)
-	p.changed = make(chan struct{})
 	return true
 }
 
@@ -102,12 +68,12 @@ func (s *server) reloadSettings() error {
 	if err != nil {
 		return err
 	}
-	mode := fastMode(value)
-	if !mode.valid() {
-		return fmt.Errorf("invalid stored fast mode %q", value)
+	mode, err := storedFastMode(value)
+	if err != nil {
+		return err
 	}
 	if s.fastMode.set(mode) {
-		s.log.Info("fast mode applied; restarting existing websockets", "fast_mode", mode)
+		s.log.Info("fast mode applied", "fast_mode", mode)
 	}
 	return nil
 }

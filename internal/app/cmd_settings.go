@@ -11,12 +11,11 @@ import (
 const settingsHelp = `Manage global settings.
 
 Usage:
-  claude-balancer settings set fast-mode <default|on|off>
+  claude-balancer settings set fast-mode <default|off>
   claude-balancer settings get fast-mode
   claude-balancer settings list [-json]
 
-Fast mode: default respects the client; on forces fast; off forces standard.
-Changes restart existing WebSockets when a running server applies them.
+Fast mode: default respects the client; off forces standard speed.
 
 Flags (place before the setting name):
   -state string  state database (default %s)
@@ -43,7 +42,7 @@ func settingsCmd(args []string) error {
 	switch args[0] {
 	case "set":
 		if fs.NArg() != 2 || fs.Arg(0) != "fast-mode" || !fastMode(fs.Arg(1)).valid() || *asJSON {
-			return errors.New("usage: settings set [-state path] fast-mode <default|on|off>")
+			return errors.New("usage: settings set [-state path] fast-mode <default|off>")
 		}
 	case "get":
 		if fs.NArg() != 1 || fs.Arg(0) != "fast-mode" {
@@ -68,12 +67,16 @@ func settingsCmd(args []string) error {
 		fmt.Printf("Saved fast-mode=%s. Running servers apply changes on their next settings poll (500 ms).\n", fs.Arg(1))
 		return nil
 	}
-	mode, err := store.raw.FastMode()
+	value, err := store.raw.FastMode()
+	if err != nil {
+		return err
+	}
+	mode, err := storedFastMode(value)
 	if err != nil {
 		return err
 	}
 	if *asJSON {
-		return json.NewEncoder(os.Stdout).Encode(map[string]string{"fast-mode": mode})
+		return json.NewEncoder(os.Stdout).Encode(map[string]string{"fast-mode": string(mode)})
 	}
 	if args[0] == "get" {
 		fmt.Println(mode)

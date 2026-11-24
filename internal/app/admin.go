@@ -213,7 +213,7 @@ func pluralSuffix(value int) string {
 
 func (s *server) adminDashboard(now time.Time, session adminSession, keys []adminKeyView) dashboardView {
 	view := s.dashboardAt(now, true)
-	mode, _ := s.fastMode.snapshot()
+	mode := s.fastMode.snapshot()
 	view.Admin = &dashboardAdminView{CSRF: session.csrf, FastMode: mode, Keys: keys, UsageSince: calendarMonthStart(now).Format("Jan 2")}
 	return view
 }

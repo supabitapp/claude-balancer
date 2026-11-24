@@ -6,18 +6,14 @@ import (
 )
 
 // Retry hints describe the next client request, so per-attempt skips no longer
-// apply. Model eligibility and the strongest blocked owner still apply.
-func (d routingDecision) cooldownRecovery(allowed map[string]bool) time.Time {
+// apply. The strongest blocked owner still applies.
+func (d routingDecision) cooldownRecovery() time.Time {
 	if d.account != nil {
 		return time.Time{}
 	}
 	var earliest time.Time
 	for _, candidate := range d.candidates {
-		if d.blocked != "" {
-			if candidate.id != d.blocked {
-				continue
-			}
-		} else if !accountAllowed(allowed, candidate.id) {
+		if d.blocked != "" && candidate.id != d.blocked {
 			continue
 		}
 		until := candidate.cooldown
