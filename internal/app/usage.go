@@ -47,6 +47,7 @@ type usagePayload struct {
 	} `json:"rate_limit_reset_credits"`
 	SpendControl *spendControlPayload `json:"spend_control"`
 	Credits      *creditsPayload      `json:"credits"`
+	ExtraUsage   *extraUsagePayload   `json:"extra_usage"`
 }
 
 type claudeUsageWindow struct {
@@ -297,6 +298,7 @@ func (s *server) pollUsage(ctx context.Context, account *Account) error {
 		payload.SpendControl,
 		payload.Credits,
 	)
+	account.adoptExtraUsage(payload.ExtraUsage)
 	if err := s.persistClaudePlan(ctx, account, payload.PlanType); err != nil && ctx.Err() == nil {
 		s.log.Debug("plan metadata persistence failed", "account", account.id(), "error", err)
 	}

@@ -135,7 +135,8 @@ Retries are limited to failures that are safe to replay:
   models until its reset window.
 - A Fable or overage-only rejection cools only the affected model. Other models
   on the same account remain eligible.
-- Fast entitlement errors are returned without rotating or cooling the account.
+- A fast-mode rejection blocks only fast requests on that account and moves the
+  request to another account. See [ROUTING.md](ROUTING.md#fast-mode).
 - A streaming request can move only before the first complete SSE data event.
   Once output is accepted, later stream errors are passed through without
   replaying the request.

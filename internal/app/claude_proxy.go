@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"mime"
 	"net/http"
@@ -33,6 +34,7 @@ const (
 // original JSON is forwarded unchanged to preserve Anthropic's wire format.
 type claudeMessageRequest struct {
 	Model    string `json:"model"`
+	Speed    string `json:"speed"`
 	Stream   bool   `json:"stream"`
 	Metadata struct {
 		UserID    json.RawMessage `json:"user_id"`
@@ -307,11 +309,36 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "model is required")
 		return
 	}
+	if s.fastMode.snapshot() == fastModeOff {
+		body = claudeStandardSpeed(body, r.Header)
+		parsed.Speed = ""
+	}
+	fast := !strings.HasSuffix(r.URL.Path, "/count_tokens") && claudeFastRequested(parsed.Speed)
+	serviceTier := ""
+	routeModel := parsed.Model
+	if fast {
+		serviceTier = serviceTierPriority
+		routeModel += claudeFastRouteSuffix
+	}
 	route := claudeRouteFrom(r, parsed)
-	owners, err := s.claudeRouteOwners(route, parsed.Model)
+	owners, err := s.claudeRouteOwners(route, routeModel)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load session route")
 		return
+	}
+	expectedOwner := ""
+	if len(owners) > 0 {
+		expectedOwner = owners[0]
+	}
+	if fast {
+		standardOwners, err := s.claudeRouteOwners(route, parsed.Model)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not load session route")
+			return
+		}
+		for _, owner := range standardOwners {
+			owners = appendUniqueOwner(owners, owner)
+		}
 	}
 	if s.pool == nil {
 		writeError(w, http.StatusServiceUnavailable, "no account pool configured")
@@ -332,17 +359,23 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		s.stats.activateThread(statsThread)
 		defer s.stats.deactivateThread(statsThread)
 	}
-	expectedOwner := ""
-	if len(owners) > 0 {
-		expectedOwner = owners[0]
-	}
 	skip := map[string]bool{}
+	fastRejected := map[string]bool{}
 	refreshed := map[string]bool{}
 	var overloadHeader http.Header
 	var overloadBody []byte
 	for attempt := 0; attempt <= claudeMaxFailoverAttempt; attempt++ {
-		account := s.selectClaudeAccountForModel(owners, skip, parsed.Model)
+		selectionSkip := skip
+		if len(fastRejected) > 0 {
+			selectionSkip = maps.Clone(skip)
+			maps.Copy(selectionSkip, fastRejected)
+		}
+		account := s.selectClaudeAccountForModel(owners, selectionSkip, parsed.Model, fast)
 		if account == nil {
+			if fast && overloadBody == nil && s.selectClaudeAccountForModel(nil, skip, parsed.Model, false) != nil {
+				writeClaudeFastUnavailable(w, s.claudeFastRetryAfter(time.Now()))
+				return
+			}
 			if overloadBody != nil {
 				writeClaudeOverload(w, overloadHeader, overloadBody)
 				return
@@ -355,7 +388,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "no Claude account available")
 			return
 		}
-		s.reserveClaudeRoute(route, parsed.Model, account, expectedOwner)
+		s.reserveClaudeRoute(route, routeModel, account, expectedOwner)
 		expectedOwner = claudeAccountID(account)
 		sent := time.Now()
 		response, requestErr := s.doClaudeMessages(ctx, r, body, account)
@@ -415,6 +448,17 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 				response.Body = &claudeStreamReadCloser{Reader: io.MultiReader(bytes.NewReader(bootstrap), stream), stream: stream}
 			}
 		}
+		if fast && (response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusBadRequest) {
+			data, readErr := io.ReadAll(io.LimitReader(response.Body, claudeMaxResponseBody+1))
+			response.Body.Close()
+			if readErr == nil && len(data) <= claudeMaxResponseBody && claudeFastRejection(response.StatusCode, response.Header, data) {
+				s.blockClaudeFast(account, parsed.Model, response)
+				fastRejected[claudeAccountID(account)] = true
+				attempt--
+				continue
+			}
+			response.Body = io.NopCloser(bytes.NewReader(data))
+		}
 		var failureBody []byte
 		if claudeSafeFailoverStatus(response.StatusCode) && attempt < claudeMaxFailoverAttempt {
 			data, readErr := io.ReadAll(io.LimitReader(response.Body, claudeMaxResponseBody+1))
@@ -459,14 +503,14 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			if counted {
 				accountID := claudeAccountID(account)
-				s.stats.recordAccepted(time.Now(), statsThread, requestIP(r), apiKey, accountID, parsed.Model, "", "", transportHTTP, metadata, true)
+				s.stats.recordAccepted(time.Now(), statsThread, requestIP(r), apiKey, accountID, parsed.Model, "", serviceTier, transportHTTP, metadata, true)
 				s.stats.answered(statsThread, accountID, time.Since(sent))
 				var responseBody bytes.Buffer
 				_, copyErr := io.Copy(io.MultiWriter(w, &responseBody), io.LimitReader(response.Body, claudeMaxResponseBody))
 				if copyErr == nil {
 					account.successfulClaudeModel(parsed.Model)
-					s.recordClaudeRoute(route, parsed.Model, account, expectedOwner)
-					s.stats.recordAPIKeyUsage(apiKey.name, statsThread, accountID, parsed.Model, "", "", claudeResponseUsage(responseBody.Bytes()))
+					s.recordClaudeRoute(route, routeModel, account, expectedOwner)
+					s.stats.recordAPIKeyUsage(apiKey.name, statsThread, accountID, parsed.Model, "", serviceTier, claudeResponseUsage(responseBody.Bytes()))
 					s.stats.completed(statsThread, accountID, metadata, time.Since(sent))
 				}
 				return
@@ -474,7 +518,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 			_, copyErr := io.Copy(w, io.LimitReader(response.Body, claudeMaxResponseBody))
 			if copyErr == nil {
 				account.successfulClaudeModel(parsed.Model)
-				s.recordClaudeRoute(route, parsed.Model, account, expectedOwner)
+				s.recordClaudeRoute(route, routeModel, account, expectedOwner)
 			}
 			return
 		}
@@ -610,7 +654,7 @@ func (s *server) claudeModels(w http.ResponseWriter, r *http.Request) {
 	skip := map[string]bool{}
 	refreshed := map[string]bool{}
 	for attempt := 0; attempt <= claudeMaxFailoverAttempt; attempt++ {
-		account := s.selectClaudeAccountForModel(nil, skip, "")
+		account := s.selectClaudeAccountForModel(nil, skip, "", false)
 		if account == nil {
 			writeError(w, http.StatusServiceUnavailable, "no Claude account available")
 			return
@@ -691,7 +735,7 @@ func (s *server) claudeRouteOwners(route claudeRoute, model string) ([]string, e
 }
 
 func (s *server) selectClaudeAccount(owners []string, skip map[string]bool) *Account {
-	return s.selectClaudeAccountForModel(owners, skip, "")
+	return s.selectClaudeAccountForModel(owners, skip, "", false)
 }
 
 func (s *server) claudeModelRetryAfter(model string) time.Duration {
@@ -725,7 +769,7 @@ func (s *server) claudeModelRetryAfter(model string) time.Duration {
 	return time.Until(retryAt)
 }
 
-func (s *server) selectClaudeAccountForModel(owners []string, skip map[string]bool, model string) *Account {
+func (s *server) selectClaudeAccountForModel(owners []string, skip map[string]bool, model string, fast bool) *Account {
 	if s == nil || s.pool == nil {
 		return nil
 	}
@@ -741,6 +785,9 @@ func (s *server) selectClaudeAccountForModel(owners []string, skip map[string]bo
 		}
 		candidate := a.routingCandidate()
 		if model != "" && (candidate.spent || now.Before(a.modelCooldownUntil(model)) || candidate.quotaExhausted(model, now)) {
+			return false
+		}
+		if fast && !a.fastEligible(now) {
 			return false
 		}
 		return !candidate.paused && candidate.reauth == "" && !now.Before(candidate.cooldown)

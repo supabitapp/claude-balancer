@@ -352,31 +352,9 @@ func TestClaude429ScopeDistinguishesCredentialModelAndRequest(t *testing.T) {
 	if got := claude429ScopeFor(model, nil); got != claude429Model {
 		t.Fatalf("model scope = %v, want model", got)
 	}
-	fast := http.Header{}
-	if got := claude429ScopeFor(fast, []byte("Usage credits are required for fast mode")); got != claude429Request {
-		t.Fatalf("fast scope = %v, want request", got)
-	}
-}
-
-func TestClaudeFastEntitlement429DoesNotCoolModel(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = io.WriteString(w, `{"error":"Usage credits are required for fast mode"}`)
-	}))
-	t.Cleanup(upstream.Close)
-	account := testAccount("account-uuid", 10)
-	srv := newTestServer(t, []*Account{account})
-	srv.upstream = upstream.URL
-	srv.lookupAPIKey = func(string) (string, bool, error) { return "test", true, nil }
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet","service_tier":"fast","messages":[]}`))
-	request.Header.Set("Authorization", "Bearer test")
-	response := httptest.NewRecorder()
-	srv.claudeMessagesHTTP(response, request)
-	if response.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want 429", response.Code)
-	}
-	if got := account.modelCooldownUntil("claude-sonnet"); !got.IsZero() {
-		t.Fatalf("model cooldown = %s, want none", got)
+	credits := http.Header{}
+	if got := claude429ScopeFor(credits, []byte("Usage credits are required for long context")); got != claude429Request {
+		t.Fatalf("credits scope = %v, want request", got)
 	}
 }
 

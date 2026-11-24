@@ -102,6 +102,31 @@ overload. An overload after streamed output stays in the stream unchanged.
 Claude Code retries a stream error that has no HTTP status only when it is
 typed as an overload.
 
+## Fast mode
+
+Claude Code requests fast mode with `"speed": "fast"`. Subscription accounts
+pay for fast mode only from usage credits, so a fast request goes only to an
+account that can spend them.
+
+- The hourly usage poll reads `extra_usage`. An account with usage credits off,
+  or at its spend limit, is skipped for fast requests. An account the poll has
+  not described yet is tried.
+- A fast request that the upstream refuses blocks fast mode on that account
+  until `Retry-After`, or for one hour. Refusals are a `429` that is not a
+  five-hour or seven-day rejection, and a `400` saying fast mode is not enabled.
+  The account still serves standard requests, and its models are not cooled.
+  The request moves to the next account without spending the failover budget.
+- When no account can serve fast mode, the balancer answers `429` with a
+  `Retry-After` of at least 20 seconds and no overage headers. Claude Code then
+  retries that turn at standard speed and offers fast mode again later.
+  Forwarding the upstream refusal instead would make Claude Code turn fast mode
+  off until it signs in again.
+- Fast and standard turns of one conversation keep separate owners, because the
+  two speeds do not share a prompt cache. A fast turn prefers the fast owner,
+  then the standard owner.
+- `claude-balancer settings set fast-mode off` removes `speed` and the
+  `fast-mode-2026-02-01` beta from every request. `default` forwards them.
+
 ## Streaming and reconnects
 
 The Messages API stream is committed when the upstream sends `message_start` or

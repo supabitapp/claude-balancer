@@ -55,6 +55,8 @@ type Account struct {
 	spendControl          *spendControlPayload
 	credits               *creditsPayload
 	creditsRejected       bool
+	extraUsage            *extraUsagePayload
+	fastBlockedUntil      time.Time
 	usageFetchedAt        time.Time
 	pollRetryAt           time.Time
 	pollFailures          int
