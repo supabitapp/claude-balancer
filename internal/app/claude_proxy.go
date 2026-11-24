@@ -332,6 +332,10 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		s.stats.activateThread(statsThread)
 		defer s.stats.deactivateThread(statsThread)
 	}
+	expectedOwner := ""
+	if len(owners) > 0 {
+		expectedOwner = owners[0]
+	}
 	skip := map[string]bool{}
 	refreshed := map[string]bool{}
 	var overloadHeader http.Header
@@ -351,7 +355,8 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "no Claude account available")
 			return
 		}
-		s.reserveClaudeRoute(route, parsed.Model, account, owners)
+		s.reserveClaudeRoute(route, parsed.Model, account, expectedOwner)
+		expectedOwner = claudeAccountID(account)
 		sent := time.Now()
 		response, requestErr := s.doClaudeMessages(ctx, r, body, account)
 		if requestErr != nil {
@@ -460,7 +465,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 				_, copyErr := io.Copy(io.MultiWriter(w, &responseBody), io.LimitReader(response.Body, claudeMaxResponseBody))
 				if copyErr == nil {
 					account.successfulClaudeModel(parsed.Model)
-					s.recordClaudeRoute(route, parsed.Model, account, owners)
+					s.recordClaudeRoute(route, parsed.Model, account, expectedOwner)
 					s.stats.recordAPIKeyUsage(apiKey.name, statsThread, accountID, parsed.Model, "", "", claudeResponseUsage(responseBody.Bytes()))
 					s.stats.completed(statsThread, accountID, metadata, time.Since(sent))
 				}
@@ -469,7 +474,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 			_, copyErr := io.Copy(w, io.LimitReader(response.Body, claudeMaxResponseBody))
 			if copyErr == nil {
 				account.successfulClaudeModel(parsed.Model)
-				s.recordClaudeRoute(route, parsed.Model, account, owners)
+				s.recordClaudeRoute(route, parsed.Model, account, expectedOwner)
 			}
 			return
 		}
@@ -572,17 +577,13 @@ func writeClaudeOverload(w http.ResponseWriter, upstream http.Header, body []byt
 	_, _ = w.Write(body)
 }
 
-func (s *server) reserveClaudeRoute(route claudeRoute, model string, account *Account, owners []string) {
+func (s *server) reserveClaudeRoute(route claudeRoute, model string, account *Account, expected string) {
 	if account == nil || s.pool == nil || s.pool.store == nil {
 		return
 	}
 	keys := route.writeKeys(model)
 	if len(keys) == 0 {
 		return
-	}
-	expected := ""
-	if len(owners) > 0 {
-		expected = owners[0]
 	}
 	now := time.Now()
 	_ = s.pool.store.recordRouteIfOwner(storedRoute{At: now, Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}, expected, now.Add(-claudeRouteFreshness))
@@ -1015,16 +1016,12 @@ func claude429ScopeFor(headers http.Header, body []byte) claude429Scope {
 	return claude429Model
 }
 
-func (s *server) recordClaudeRoute(route claudeRoute, model string, account *Account, owners []string) {
+func (s *server) recordClaudeRoute(route claudeRoute, model string, account *Account, expected string) {
 	if account == nil || s.pool == nil || s.pool.store == nil || len(route.writeKeys(model)) == 0 {
 		return
 	}
 	at := time.Now()
 	keys := route.writeKeys(model)
-	expected := ""
-	if len(owners) > 0 {
-		expected = owners[0]
-	}
 	_ = s.pool.store.recordRouteIfOwner(storedRoute{At: at, Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}, expected, time.Time{})
 	account.accepted(at)
 }
