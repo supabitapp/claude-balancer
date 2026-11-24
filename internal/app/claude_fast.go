@@ -11,7 +11,7 @@ import (
 
 const (
 	claudeFastBeta          = "fast-mode-2026-02-01"
-	claudeFastRouteSuffix   = ":fast"
+	claudeFastRouteSuffix   = "#fast"
 	claudeFastBlockDefault  = time.Hour
 	claudeFastMinRetryAfter = 20 * time.Second
 	claudeFastMaxRetryAfter = time.Hour
@@ -23,8 +23,11 @@ type extraUsagePayload struct {
 }
 
 func claudeFastRequested(speed string) bool {
-	speed = strings.ToLower(strings.TrimSpace(speed))
-	return speed != "" && speed != "standard"
+	return strings.EqualFold(strings.TrimSpace(speed), "fast")
+}
+
+func claudeFastRouteModel(model string) string {
+	return canonicalClaudeModel(model) + claudeFastRouteSuffix
 }
 
 func (a *Account) adoptExtraUsage(extra *extraUsagePayload) {
@@ -63,7 +66,7 @@ func (a *Account) fastBlockedAt() time.Time {
 func claudeFastRejection(status int, headers http.Header, body []byte) bool {
 	switch status {
 	case http.StatusTooManyRequests:
-		return claude429ScopeFor(headers, body) != claude429Credential
+		return claude429ScopeFor(headers, body) == claude429Request || !claudeQuotaStatusReported(headers)
 	case http.StatusBadRequest:
 		return bytes.Contains(bytes.ToLower(body), []byte("fast mode is not enabled"))
 	default:
@@ -71,9 +74,24 @@ func claudeFastRejection(status int, headers http.Header, body []byte) bool {
 	}
 }
 
+func claudeQuotaStatusReported(headers http.Header) bool {
+	for _, name := range []string{
+		"anthropic-ratelimit-unified-status",
+		"anthropic-ratelimit-unified-5h-status",
+		"anthropic-ratelimit-unified-7d-status",
+		"anthropic-ratelimit-unified-7d_oi-status",
+		"anthropic-ratelimit-unified-overage-status",
+	} {
+		if claudeHeaderValue(headers, name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func claudeFastBlockUntil(headers http.Header, now time.Time) time.Time {
-	if seconds, err := strconv.Atoi(strings.TrimSpace(headers.Get("Retry-After"))); err == nil && seconds > 0 {
-		return now.Add(time.Duration(seconds) * time.Second)
+	if until := claudeRetryAfterHeader(headers, now); until.After(now) {
+		return until
 	}
 	return now.Add(claudeFastBlockDefault)
 }

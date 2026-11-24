@@ -184,7 +184,8 @@ func TestFastAndStandardTurnsKeepSeparateOwners(t *testing.T) {
 
 	sendClaudeMessage(t, srv, "session-1", fastBody, nil)
 	sendClaudeMessage(t, srv, "session-1", standardBody, nil)
-	sendClaudeMessage(t, srv, "session-1", fastBody, nil)
+	standardOwner.adoptExtraUsage(nil)
+	sendClaudeMessage(t, srv, "session-1", `{"model":"claude-opus-5-5(high)","speed":"fast","messages":[]}`, nil)
 	got := tokensOf(fake.snapshot())
 	want := []string{got[0], fastOwner, got[0], fastOwner}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -288,5 +289,39 @@ func TestUsagePollLearnsExtraUsage(t *testing.T) {
 	}
 	if account.fastEligible(time.Now()) {
 		t.Fatal("an account with usage credits off is still eligible for fast mode")
+	}
+}
+
+func TestModelQuotaRejectionOnFastRequestCoolsOnlyTheModel(t *testing.T) {
+	a, b := testAccount("account-a", 10), testAccount("account-b", 10)
+	srv, _ := newFastTestServer(t, []*Account{a, b}, func(call claudeUpstreamCall, _ int, w http.ResponseWriter) {
+		if call.token == "token-account-a" {
+			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "allowed")
+			w.Header().Set("Anthropic-Ratelimit-Unified-7d-Status", "allowed")
+			w.Header().Set("Anthropic-Ratelimit-Unified-7d_oi-Status", "rejected")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		writeClaudeOK(w)
+	})
+	for i := range 2 {
+		if response := sendClaudeMessage(t, srv, "session-"+strconv.Itoa(i), fastBody, nil); response.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 from account-b", response.Code)
+		}
+	}
+	if !a.fastBlockedAt().IsZero() {
+		t.Fatal("a model quota rejection blocked fast mode for every model on the account")
+	}
+	if !a.modelCooldownUntil("claude-opus-5-5").After(time.Now()) {
+		t.Fatal("a model quota rejection did not cool the model")
+	}
+}
+
+func TestUnknownSpeedIsForwardedForUpstreamValidation(t *testing.T) {
+	a := disableExtraUsage(testAccount("account-a", 10))
+	srv, fake := newFastTestServer(t, []*Account{a}, func(_ claudeUpstreamCall, _ int, w http.ResponseWriter) { writeClaudeOK(w) })
+	response := sendClaudeMessage(t, srv, "session-1", `{"model":"claude-opus-5-5","speed":"turbo","messages":[]}`, nil)
+	if response.Code != http.StatusOK || len(fake.snapshot()) != 1 {
+		t.Fatalf("status = %d with %d upstream calls, want the request forwarded", response.Code, len(fake.snapshot()))
 	}
 }

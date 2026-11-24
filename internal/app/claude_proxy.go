@@ -318,7 +318,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 	routeModel := parsed.Model
 	if fast {
 		serviceTier = serviceTierPriority
-		routeModel += claudeFastRouteSuffix
+		routeModel = claudeFastRouteModel(parsed.Model)
 	}
 	route := claudeRouteFrom(r, parsed)
 	owners, err := s.claudeRouteOwners(route, routeModel)
@@ -326,9 +326,10 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load session route")
 		return
 	}
-	expectedOwner := ""
-	if len(owners) > 0 {
-		expectedOwner = owners[0]
+	expectedOwner, err := s.claudeRouteWriteOwner(route, routeModel)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load session route")
+		return
 	}
 	if fast {
 		standardOwners, err := s.claudeRouteOwners(route, parsed.Model)
@@ -372,7 +373,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		account := s.selectClaudeAccountForModel(owners, selectionSkip, parsed.Model, fast)
 		if account == nil {
-			if fast && overloadBody == nil && s.selectClaudeAccountForModel(nil, skip, parsed.Model, false) != nil {
+			if fast && overloadBody == nil && s.claudeAccountAvailable(skip, parsed.Model) {
 				writeClaudeFastUnavailable(w, s.claudeFastRetryAfter(time.Now()))
 				return
 			}
@@ -451,7 +452,15 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		if fast && (response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusBadRequest) {
 			data, readErr := io.ReadAll(io.LimitReader(response.Body, claudeMaxResponseBody+1))
 			response.Body.Close()
-			if readErr == nil && len(data) <= claudeMaxResponseBody && claudeFastRejection(response.StatusCode, response.Header, data) {
+			if readErr != nil || len(data) > claudeMaxResponseBody {
+				skip[claudeAccountID(account)] = true
+				if attempt < claudeMaxFailoverAttempt {
+					continue
+				}
+				writeError(w, http.StatusBadGateway, "Claude upstream unavailable")
+				return
+			}
+			if claudeFastRejection(response.StatusCode, response.Header, data) {
 				s.blockClaudeFast(account, parsed.Model, response)
 				fastRejected[claudeAccountID(account)] = true
 				attempt--
@@ -734,6 +743,18 @@ func (s *server) claudeRouteOwners(route claudeRoute, model string) ([]string, e
 	return owners, nil
 }
 
+func (s *server) claudeRouteWriteOwner(route claudeRoute, model string) (string, error) {
+	keys := route.writeKeys(model)
+	if s.pool == nil || s.pool.store == nil || len(keys) == 0 {
+		return "", nil
+	}
+	owners, err := s.pool.store.routeOwnersFresh(keys[0], "", claudeRouteFreshness)
+	if err != nil || len(owners) == 0 {
+		return "", err
+	}
+	return owners[0], nil
+}
+
 func (s *server) selectClaudeAccount(owners []string, skip map[string]bool) *Account {
 	return s.selectClaudeAccountForModel(owners, skip, "", false)
 }
@@ -776,21 +797,7 @@ func (s *server) selectClaudeAccountForModel(owners []string, skip map[string]bo
 	now := time.Now()
 	accounts := s.pool.all()
 	eligible := func(a *Account) bool {
-		id := claudeAccountID(a)
-		if id == "" || skip[id] {
-			return false
-		}
-		if !strings.EqualFold(claimsFromToken(a.persisted().IDToken).Provider, "claude") {
-			return false
-		}
-		candidate := a.routingCandidate()
-		if model != "" && (candidate.spent || now.Before(a.modelCooldownUntil(model)) || candidate.quotaExhausted(model, now)) {
-			return false
-		}
-		if fast && !a.fastEligible(now) {
-			return false
-		}
-		return !candidate.paused && candidate.reauth == "" && !now.Before(candidate.cooldown)
+		return claudeAccountEligible(a, skip, model, fast, now)
 	}
 	for _, owner := range owners {
 		for _, account := range accounts {
@@ -822,6 +829,34 @@ func (s *server) selectClaudeAccountForModel(owners []string, skip map[string]bo
 		return nil
 	}
 	return s.pool.selectClaudeRoundRobin(model, candidates)
+}
+
+func claudeAccountEligible(a *Account, skip map[string]bool, model string, fast bool, now time.Time) bool {
+	id := claudeAccountID(a)
+	if id == "" || skip[id] {
+		return false
+	}
+	if !strings.EqualFold(claimsFromToken(a.persisted().IDToken).Provider, "claude") {
+		return false
+	}
+	candidate := a.routingCandidate()
+	if model != "" && (candidate.spent || now.Before(a.modelCooldownUntil(model)) || candidate.quotaExhausted(model, now)) {
+		return false
+	}
+	if fast && !a.fastEligible(now) {
+		return false
+	}
+	return !candidate.paused && candidate.reauth == "" && !now.Before(candidate.cooldown)
+}
+
+func (s *server) claudeAccountAvailable(skip map[string]bool, model string) bool {
+	now := time.Now()
+	for _, account := range s.pool.all() {
+		if claudeAccountEligible(account, skip, model, false, now) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *server) doClaudeMessages(ctx context.Context, inbound *http.Request, body []byte, account *Account) (*http.Response, error) {
