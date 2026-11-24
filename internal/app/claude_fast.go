@@ -30,12 +30,7 @@ func claudeFastRequested(speed string) bool {
 func (a *Account) adoptExtraUsage(extra *extraUsagePayload) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if extra == nil {
-		a.extraUsage = nil
-		return
-	}
-	cloned := *extra
-	a.extraUsage = &cloned
+	a.extraUsage = extra
 }
 
 func (a *Account) fastEligible(now time.Time) bool {
