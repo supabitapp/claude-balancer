@@ -66,7 +66,10 @@ func (a *Account) fastBlockedAt() time.Time {
 func claudeFastRejection(status int, headers http.Header, body []byte) bool {
 	switch status {
 	case http.StatusTooManyRequests:
-		return claude429ScopeFor(headers, body) == claude429Request || !claudeQuotaStatusReported(headers)
+		if claudeStatusRejected(claudeHeaderValue(headers, "anthropic-ratelimit-unified-5h-status")) || claudeStatusRejected(claudeHeaderValue(headers, "anthropic-ratelimit-unified-7d-status")) {
+			return false
+		}
+		return claudeCreditsRequired(body) || !claudeQuotaStatusReported(headers)
 	case http.StatusBadRequest:
 		return bytes.Contains(bytes.ToLower(body), []byte("fast mode is not enabled"))
 	default:

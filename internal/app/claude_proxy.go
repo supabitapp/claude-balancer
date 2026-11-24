@@ -360,6 +360,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		s.stats.activateThread(statsThread)
 		defer s.stats.deactivateThread(statsThread)
 	}
+	var superseded []string
 	skip := map[string]bool{}
 	fastRejected := map[string]bool{}
 	refreshed := map[string]bool{}
@@ -373,7 +374,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		account := s.selectClaudeAccountForModel(owners, selectionSkip, parsed.Model, fast)
 		if account == nil {
-			if fast && overloadBody == nil && s.claudeAccountAvailable(skip, parsed.Model) {
+			if fast && s.claudeAccountAvailable(skip, parsed.Model) {
 				writeClaudeFastUnavailable(w, s.claudeFastRetryAfter(time.Now()))
 				return
 			}
@@ -390,7 +391,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.reserveClaudeRoute(route, routeModel, account, expectedOwner)
-		expectedOwner = claudeAccountID(account)
+		superseded = append(superseded, claudeAccountID(account))
 		sent := time.Now()
 		response, requestErr := s.doClaudeMessages(ctx, r, body, account)
 		if requestErr != nil {
@@ -518,7 +519,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 				_, copyErr := io.Copy(io.MultiWriter(w, &responseBody), io.LimitReader(response.Body, claudeMaxResponseBody))
 				if copyErr == nil {
 					account.successfulClaudeModel(parsed.Model)
-					s.recordClaudeRoute(route, routeModel, account, expectedOwner)
+					s.recordClaudeRoute(route, routeModel, account, append([]string{expectedOwner}, superseded...))
 					s.stats.recordAPIKeyUsage(apiKey.name, statsThread, accountID, parsed.Model, "", serviceTier, claudeResponseUsage(responseBody.Bytes()))
 					s.stats.completed(statsThread, accountID, metadata, time.Since(sent))
 				}
@@ -527,7 +528,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 			_, copyErr := io.Copy(w, io.LimitReader(response.Body, claudeMaxResponseBody))
 			if copyErr == nil {
 				account.successfulClaudeModel(parsed.Model)
-				s.recordClaudeRoute(route, routeModel, account, expectedOwner)
+				s.recordClaudeRoute(route, routeModel, account, append([]string{expectedOwner}, superseded...))
 			}
 			return
 		}
@@ -986,6 +987,16 @@ func claudeShouldFailover(status int, headers http.Header, body []byte) bool {
 	return status != http.StatusTooManyRequests || claude429ScopeFor(headers, body) != claude429Request
 }
 
+func claudeCreditsRequired(body []byte) bool {
+	text := strings.ToLower(string(body))
+	for _, phrase := range []string{"fast request rejected", "usage credits are required", "credits are required"} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 func claudeCredentialRateLimited(headers http.Header) bool {
 	return claude429ScopeFor(headers, nil) == claude429Credential
 }
@@ -1084,12 +1095,10 @@ func claude429ScopeFor(headers http.Header, body []byte) claude429Scope {
 		}
 		return claude429Model
 	}
-	text := strings.ToLower(string(body))
-	for _, phrase := range []string{"fast request rejected", "usage credits are required", "credits are required"} {
-		if strings.Contains(text, phrase) {
-			return claude429Request
-		}
+	if claudeCreditsRequired(body) {
+		return claude429Request
 	}
+	text := strings.ToLower(string(body))
 	for _, phrase := range []string{"model overloaded", "model is overloaded", "model rate limit", "model quota"} {
 		if strings.Contains(text, phrase) {
 			return claude429Model
@@ -1098,13 +1107,16 @@ func claude429ScopeFor(headers http.Header, body []byte) claude429Scope {
 	return claude429Model
 }
 
-func (s *server) recordClaudeRoute(route claudeRoute, model string, account *Account, expected string) {
+func (s *server) recordClaudeRoute(route claudeRoute, model string, account *Account, expected []string) {
 	if account == nil || s.pool == nil || s.pool.store == nil || len(route.writeKeys(model)) == 0 {
 		return
 	}
 	at := time.Now()
 	keys := route.writeKeys(model)
-	_ = s.pool.store.recordRouteIfOwner(storedRoute{At: at, Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}, expected, time.Time{})
+	stored := storedRoute{At: at, Thread: keys[0], Aliases: keys[1:], Account: claudeAccountID(account)}
+	for _, owner := range expected {
+		_ = s.pool.store.recordRouteIfOwner(stored, owner, time.Time{})
+	}
 	account.accepted(at)
 }
 

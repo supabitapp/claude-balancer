@@ -95,3 +95,34 @@ func TestClaudeFailoverHandsRouteToTheAccountThatServed(t *testing.T) {
 		t.Fatalf("route owners = %v, want [%s], the account that served the turn", owners, served)
 	}
 }
+
+func TestFailedRetryKeepsARouteAnotherRequestWon(t *testing.T) {
+	accounts := []*Account{testAccount("account-a", 10), testAccount("account-b", 10), testAccount("account-c", 10)}
+	var srv *server
+	winner := ""
+	_, upstream := newClaudeFakeUpstream(t, func(call claudeUpstreamCall, index int, w http.ResponseWriter) {
+		if index == 0 {
+			winner = strings.TrimPrefix(call.token, "token-")
+			for _, account := range accounts {
+				if claudeAccountID(account) == winner {
+					srv.recordClaudeRoute(claudeRoute{session: "session-1"}, "claude-sonnet", account, []string{winner})
+				}
+			}
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	srv = newTestServer(t, accounts)
+	srv.upstream = upstream
+	srv.lookupAPIKey = func(string) (string, bool, error) { return "test", true, nil }
+
+	if response := sendClaudeMessage(t, srv, "session-1", `{"model":"claude-sonnet","messages":[]}`, nil); response.Code == http.StatusOK {
+		t.Fatal("every account failed, want an error")
+	}
+	owners, err := srv.claudeRouteOwners(claudeRoute{session: "session-1"}, "claude-sonnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owners) != 1 || owners[0] != winner {
+		t.Fatalf("route owners = %v, want [%s] from the request that succeeded", owners, winner)
+	}
+}

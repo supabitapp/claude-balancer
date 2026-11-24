@@ -325,3 +325,41 @@ func TestUnknownSpeedIsForwardedForUpstreamValidation(t *testing.T) {
 		t.Fatalf("status = %d with %d upstream calls, want the request forwarded", response.Code, len(fake.snapshot()))
 	}
 }
+
+func TestCreditsRefusalWithUnifiedRejectionStaysFastOnly(t *testing.T) {
+	a, b := testAccount("account-a", 10), testAccount("account-b", 10)
+	srv, _ := newFastTestServer(t, []*Account{a, b}, func(call claudeUpstreamCall, _ int, w http.ResponseWriter) {
+		if call.token == "token-account-a" {
+			w.Header().Set("Anthropic-Ratelimit-Unified-Status", "rejected")
+			writeCapturedFastRejection(w)
+			return
+		}
+		writeClaudeOK(w)
+	})
+	for i := range 2 {
+		if response := sendClaudeMessage(t, srv, "session-"+strconv.Itoa(i), fastBody, nil); response.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 from account-b", response.Code)
+		}
+	}
+	if a.routingCandidate().cooldown.After(time.Now()) {
+		t.Fatal("a fast credits refusal cooled the whole credential")
+	}
+	if a.fastBlockedAt().IsZero() {
+		t.Fatal("a fast credits refusal did not block fast mode")
+	}
+}
+
+func TestFastFallbackWinsOverAnEarlierOverload(t *testing.T) {
+	a, b := testAccount("account-a", 10), testAccount("account-b", 10)
+	srv, _ := newFastTestServer(t, []*Account{a, b}, func(call claudeUpstreamCall, index int, w http.ResponseWriter) {
+		if index == 0 {
+			w.WriteHeader(claudeOverloadedStatus)
+			return
+		}
+		writeCapturedFastRejection(w)
+	})
+	response := sendClaudeMessage(t, srv, "session-1", fastBody, nil)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want the fast fallback 429 so the client retries at standard speed", response.Code)
+	}
+}
