@@ -24,7 +24,6 @@ const (
 	claudeMessagesAliasPath  = "/messages"
 	claudeMaxRequestBody     = 32 << 20
 	claudeMaxResponseBody    = 256 << 20
-	claudeUpstreamTimeout    = 90 * time.Second
 	claudeMaxFailoverAttempt = 2
 	claudeRouteFreshness     = time.Hour
 	claudeOverloadedStatus   = 529
@@ -510,13 +509,17 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		account.observeClaudeHeaders(response.Header)
 		copyClaudeResponseHeaders(w.Header(), response.Header)
 		w.WriteHeader(response.StatusCode)
+		out := io.Writer(w)
+		if parsed.Stream {
+			out = flushingWriter{w: w, controller: http.NewResponseController(w)}
+		}
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			if counted {
 				accountID := claudeAccountID(account)
 				s.stats.recordAccepted(time.Now(), statsThread, requestIP(r), apiKey, accountID, parsed.Model, "", serviceTier, transportHTTP, metadata, true)
 				s.stats.answered(statsThread, accountID, time.Since(sent))
 				var responseBody bytes.Buffer
-				_, copyErr := io.Copy(io.MultiWriter(w, &responseBody), io.LimitReader(response.Body, claudeMaxResponseBody))
+				_, copyErr := io.Copy(io.MultiWriter(out, &responseBody), io.LimitReader(response.Body, claudeMaxResponseBody))
 				if copyErr == nil {
 					account.successfulClaudeModel(parsed.Model)
 					s.recordClaudeRoute(route, routeModel, account, append([]string{expectedOwner}, superseded...))
@@ -525,7 +528,7 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-			_, copyErr := io.Copy(w, io.LimitReader(response.Body, claudeMaxResponseBody))
+			_, copyErr := io.Copy(out, io.LimitReader(response.Body, claudeMaxResponseBody))
 			if copyErr == nil {
 				account.successfulClaudeModel(parsed.Model)
 				s.recordClaudeRoute(route, routeModel, account, append([]string{expectedOwner}, superseded...))
@@ -545,6 +548,19 @@ func (s *server) claudeMessagesHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+}
+
+type flushingWriter struct {
+	w          io.Writer
+	controller *http.ResponseController
+}
+
+func (f flushingWriter) Write(p []byte) (int, error) {
+	n, err := f.w.Write(p)
+	if err != nil {
+		return n, err
+	}
+	return n, f.controller.Flush()
 }
 
 type claudeStreamReadCloser struct {

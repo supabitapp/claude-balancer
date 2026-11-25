@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -502,5 +503,45 @@ func TestClaudeStreamOverloadBeforeOutputFailsOver(t *testing.T) {
 	body := response.Body.String()
 	if response.Code != http.StatusOK || calls != 2 || !strings.Contains(body, "message_start") || strings.Contains(body, "overloaded_error") {
 		t.Fatalf("status = %d calls = %d body = %s, want failover to a healthy stream", response.Code, calls, body)
+	}
+}
+
+func TestClaudeStreamDeliversEventsBeforeUpstreamFinishes(t *testing.T) {
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\"}\n\n")
+		w.(http.Flusher).Flush()
+		_, _ = io.WriteString(w, "event: ping\ndata: {\"type\":\"ping\"}\n\n")
+		w.(http.Flusher).Flush()
+		<-release
+	}))
+	t.Cleanup(upstream.Close)
+	t.Cleanup(func() { close(release) })
+	srv := newTestServer(t, []*Account{testAccount("account-a", 10)})
+	srv.upstream = upstream.URL
+	srv.lookupAPIKey = func(string) (string, bool, error) { return "test", true, nil }
+	proxy := httptest.NewServer(http.HandlerFunc(srv.claudeMessagesHTTP))
+	t.Cleanup(proxy.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, proxy.URL+"/v1/messages", strings.NewReader(`{"model":"claude-sonnet","stream":true,"messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer test")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("no response headers while upstream stream is open: %v", err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	var seen strings.Builder
+	for !strings.Contains(seen.String(), `"type":"ping"`) {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("stream events not delivered while upstream is open: %v; got %q", err, seen.String())
+		}
+		seen.WriteString(line)
 	}
 }
